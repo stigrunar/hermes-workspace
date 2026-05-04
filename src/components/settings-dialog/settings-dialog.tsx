@@ -252,6 +252,7 @@ function HermesContent() {
   const configAvailable = useFeatureAvailable('config')
   const [activeProvider, setActiveProvider] = useState('')
   const [activeModel, setActiveModel] = useState('')
+  const [claudeHome, setClaudeHome] = useState('')
   const [availableModels, setAvailableModels] = useState<Array<string>>([])
   const [editingKey, setEditingKey] = useState<string | null>(null)
   const [keyInput, setKeyInput] = useState('')
@@ -319,6 +320,7 @@ function HermesContent() {
         setActiveProvider(d.activeProvider || '')
         setActiveModel(d.activeModel || '')
         if (d.activeProvider) fetchModelsForProvider(d.activeProvider)
+        setClaudeHome(d.claudeHome || '')
         const mem = (d.config?.memory as Record<string, unknown>) || {}
         setMemEnabled(mem.memory_enabled !== false)
         setUserProfileEnabled(mem.user_profile_enabled !== false)
@@ -355,6 +357,7 @@ function HermesContent() {
       const d = await ref.json()
       setActiveProvider(d.activeProvider || '')
       setActiveModel(d.activeModel || '')
+      setClaudeHome(d.claudeHome || '')
       const keys: Record<string, string> = {}
       for (const p of d.providers || []) {
         if (p.configured && p.envKeys?.[0])
@@ -782,7 +785,9 @@ function HermesContent() {
               '—'}
           </span>
           <span style={mutedStyle}>Config</span>
-          <span className="font-mono font-medium">~/.hermes/config.yaml</span>
+          <span className="font-mono font-medium">
+            {claudeHome ? `${claudeHome}/config.yaml` : '~/.hermes/config.yaml'}
+          </span>
         </div>
       </div>
     </div>

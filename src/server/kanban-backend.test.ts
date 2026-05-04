@@ -69,10 +69,10 @@ async function loadKanbanBackend(options?: {
 
 describe('kanban-backend', () => {
   it('auto-detect prefers Hermes backend when Hermes CLI and canonical storage are present', async () => {
-    vi.stubEnv('CLAUDE_HOME', '/Users/aurora/.claude/profiles/swarm2')
+    vi.stubEnv('CLAUDE_HOME', '/home/openclaw/.hermes/profiles/swarm2')
     const sqliteCalls: Array<{ command: string; args?: string[] }> = []
     const mod = await loadKanbanBackend({
-      existsSync: (target) => target === '/Users/aurora/.claude/kanban.db' || target === '/Users/aurora/.claude/kanban',
+      existsSync: (target) => target === '/home/openclaw/.hermes/kanban.db' || target === '/home/openclaw/.hermes/kanban',
       execFileSync: (command, args = []) => {
         if (command === 'which' && args[0] === 'claude') return '/Users/aurora/.local/bin/claude\n'
         if (command === '/Users/aurora/.local/bin/claude' && args[0] === '--version') return 'claude 1.0.0\n'
@@ -98,7 +98,9 @@ describe('kanban-backend', () => {
       id: 'claude',
       detected: true,
       writable: true,
-      path: '/Users/aurora/.claude/kanban.db',
+      path: '/home/openclaw/.hermes/kanban.db',
+      canonicalPath: '/home/openclaw/.hermes/kanban.db',
+      isCanonical: true,
     })
 
     const cards = mod.listKanbanCards()
@@ -110,13 +112,13 @@ describe('kanban-backend', () => {
       assignedWorker: 'swarm2',
       createdBy: 'claude-kanban',
     })
-    expect(sqliteCalls[0]?.args?.[0]).toBe('/Users/aurora/.claude/kanban.db')
+    expect(sqliteCalls[0]?.args?.[0]).toBe('/home/openclaw/.hermes/kanban.db')
   })
 
   it('auto-detect uses Hermes storage directly when the CLI is unavailable', async () => {
-    vi.stubEnv('CLAUDE_HOME', '/Users/aurora/.claude/profiles/swarm2')
+    vi.stubEnv('CLAUDE_HOME', '/home/openclaw/.hermes/profiles/swarm2')
     const mod = await loadKanbanBackend({
-      existsSync: (target) => target === '/Users/aurora/.claude/kanban.db',
+      existsSync: (target) => target === '/home/openclaw/.hermes/kanban.db',
       execFileSync: (command, args = []) => {
         if (command === 'which' && args[0] === 'claude') throw new Error('not found')
         if (command === 'sqlite3') {
@@ -140,16 +142,18 @@ describe('kanban-backend', () => {
       id: 'claude',
       detected: true,
       writable: true,
-      path: '/Users/aurora/.claude/kanban.db',
+      path: '/home/openclaw/.hermes/kanban.db',
+      canonicalPath: '/home/openclaw/.hermes/kanban.db',
+      isCanonical: true,
     })
-    expect(mod.getKanbanBackendMeta().details).toContain('direct local storage access')
+    expect(mod.getKanbanBackendMeta().details).toContain('Canonical root Hermes Kanban board detected')
     expect(mod.listKanbanCards()[0]).toMatchObject({ id: 't_direct', status: 'ready' })
   })
 
   it('resolves canonical Kanban paths from legacy profile-home env fallback too', async () => {
-    vi.stubEnv('CLAUDE_HOME', '/Users/aurora/.claude/profiles/swarm5/home')
+    vi.stubEnv('CLAUDE_HOME', '/home/openclaw/.hermes/profiles/swarm5/home')
     const mod = await loadKanbanBackend({
-      existsSync: (target) => target === '/Users/aurora/.claude/kanban.db',
+      existsSync: (target) => target === '/home/openclaw/.hermes/kanban.db',
       execFileSync: (command, args = []) => {
         if (command === 'which' && args[0] === 'claude') throw new Error('not found')
         if (command === 'sqlite3') return '[]'
@@ -160,12 +164,14 @@ describe('kanban-backend', () => {
     expect(mod.getKanbanBackendMeta()).toMatchObject({
       id: 'claude',
       detected: true,
-      path: '/Users/aurora/.claude/kanban.db',
+      path: '/home/openclaw/.hermes/kanban.db',
+      canonicalPath: '/home/openclaw/.hermes/kanban.db',
+      isCanonical: true,
     })
   })
 
   it('auto-detect falls back to local when canonical Hermes storage is missing', async () => {
-    vi.stubEnv('CLAUDE_HOME', '/Users/aurora/.claude/profiles/swarm2')
+    vi.stubEnv('CLAUDE_HOME', '/home/openclaw/.hermes/profiles/swarm2')
     const mod = await loadKanbanBackend({
       existsSync: () => false,
       execFileSync: (command, args = []) => {
@@ -180,16 +186,18 @@ describe('kanban-backend', () => {
       detected: true,
       writable: true,
       path: '/tmp/swarm2-kanban.json',
+      isCanonical: false,
+      canonicalPath: null,
     })
     expect(mod.listKanbanCards()[0]?.id).toBe('local-1')
   })
 
   it('creates and updates Hermes tasks through canonical kanban.db path', async () => {
-    vi.stubEnv('CLAUDE_HOME', '/Users/aurora/.claude/profiles/swarm2')
+    vi.stubEnv('CLAUDE_HOME', '/home/openclaw/.hermes/profiles/swarm2')
     const sqliteCalls: string[] = []
     let readCount = 0
     const mod = await loadKanbanBackend({
-      existsSync: (target) => target === '/Users/aurora/.claude/kanban.db' || target === '/Users/aurora/.claude/kanban',
+      existsSync: (target) => target === '/home/openclaw/.hermes/kanban.db' || target === '/home/openclaw/.hermes/kanban',
       execFileSync: (command, args = []) => {
         if (command === 'which' && args[0] === 'claude') return '/Users/aurora/.local/bin/claude\n'
         if (command === '/Users/aurora/.local/bin/claude' && args[0] === '--version') return 'claude 1.0.0\n'
@@ -221,7 +229,7 @@ describe('kanban-backend', () => {
 
     expect(created).toMatchObject({ id: 't_deadbeef', title: 'Created Hermes task', status: 'backlog', assignedWorker: 'swarm6', createdBy: 'claude-kanban' })
     expect(updated).toMatchObject({ id: 't_deadbeef', title: 'Updated Hermes task', status: 'done', assignedWorker: 'swarm6' })
-    expect(sqliteCalls.every((call) => call.startsWith('/Users/aurora/.claude/kanban.db '))).toBe(true)
+    expect(sqliteCalls.every((call) => call.startsWith('/home/openclaw/.hermes/kanban.db '))).toBe(true)
     expect(sqliteCalls.some((call) => call.includes('insert into tasks'))).toBe(true)
     expect(sqliteCalls.some((call) => call.includes('update tasks set'))).toBe(true)
   })

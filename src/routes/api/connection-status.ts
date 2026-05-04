@@ -122,6 +122,7 @@ export const Route = createFileRoute('/api/connection-status')({
             models: caps.models,
             streaming: caps.streaming,
             sessions: caps.sessions,
+            enhancedChat: caps.enhancedChat,
             skills: caps.skills,
             memory: caps.memory,
             config: caps.config,

@@ -22,6 +22,8 @@ export type KanbanBackendMeta = {
   writable: boolean
   details?: string | null
   path?: string | null
+  canonicalPath?: string | null
+  isCanonical?: boolean
 }
 
 type KanbanBackend = {
@@ -98,7 +100,7 @@ function detectClaudeKanban(): ClaudeDetection {
       cliPath: null,
       dbPath,
       workspacePath,
-      reason: 'Hermes Kanban storage not found; using the local Swarm Board fallback.',
+      reason: 'Canonical root Hermes Kanban board not found on this host; using the local fallback board instead.',
     }
   }
 
@@ -108,7 +110,7 @@ function detectClaudeKanban(): ClaudeDetection {
     cliPath: cli.ok ? cli.path ?? null : null,
     dbPath,
     workspacePath,
-    reason: cli.ok ? undefined : 'Hermes Kanban storage detected; CLI unavailable, using direct local storage access.',
+    reason: cli.ok ? undefined : 'Canonical root Hermes Kanban board detected; CLI unavailable, using direct sqlite access.',
   }
 }
 
@@ -234,11 +236,13 @@ const localBackend: KanbanBackend = {
   meta() {
     return {
       id: 'local',
-      label: 'Local board',
+      label: 'Local fallback board',
       detected: true,
       writable: true,
       path: SWARM_KANBAN_FILE,
-      details: 'Using local Swarm board JSON store.',
+      canonicalPath: null,
+      isCanonical: false,
+      details: 'Using the local Swarm JSON store only because the canonical root Hermes Kanban board is unavailable on this host.',
     }
   },
   list() {
@@ -257,13 +261,15 @@ const claudeBackend: KanbanBackend = {
     const detection = detectClaudeKanban()
     return {
       id: 'claude',
-      label: 'Hermes Kanban',
+      label: 'Canonical root Hermes board',
       detected: detection.available,
       writable: detection.available,
       path: fs.existsSync(detection.dbPath) ? detection.dbPath : null,
+      canonicalPath: detection.dbPath,
+      isCanonical: true,
       details: detection.available
-        ? detection.reason ?? `Hermes Kanban storage detected (${detection.cliPath ?? 'direct sqlite'}, ${detection.dbPath})`
-        : detection.reason ?? 'Hermes Kanban not detected.',
+        ? detection.reason ?? `Canonical root Hermes Kanban board detected (${detection.cliPath ?? 'direct sqlite'}, ${detection.dbPath})`
+        : detection.reason ?? 'Canonical root Hermes Kanban board not detected.',
     }
   },
   list() {

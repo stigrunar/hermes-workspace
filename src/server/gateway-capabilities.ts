@@ -127,10 +127,19 @@ export function getResolvedUrls(): {
   dashboard: string
   source: 'override' | 'env' | 'default'
 } {
+  const defaultGateway = normalizeUrl(
+    process.env.HERMES_API_URL || process.env.CLAUDE_API_URL || 'http://127.0.0.1:8642',
+  )
+  const defaultDashboard = normalizeUrl(
+    process.env.HERMES_DASHBOARD_URL || process.env.CLAUDE_DASHBOARD_URL || 'http://127.0.0.1:9119',
+  )
   const overrides = readOverrides()
-  const source = overrides.claudeApiUrl
+  const hasMeaningfulOverride =
+    (overrides.claudeApiUrl && normalizeUrl(overrides.claudeApiUrl) !== defaultGateway) ||
+    (overrides.claudeDashboardUrl && normalizeUrl(overrides.claudeDashboardUrl) !== defaultDashboard)
+  const source = hasMeaningfulOverride
     ? 'override'
-    : (process.env.HERMES_API_URL || process.env.CLAUDE_API_URL)
+    : (process.env.HERMES_API_URL || process.env.CLAUDE_API_URL || process.env.HERMES_DASHBOARD_URL || process.env.CLAUDE_DASHBOARD_URL)
       ? 'env'
       : 'default'
   return { gateway: CLAUDE_API, dashboard: CLAUDE_DASHBOARD_URL, source }
@@ -238,7 +247,8 @@ let dashboardTokenPromise: Promise<string> | null = null
 let dashboardTokenCache = ''
 
 /** Optional bearer token for authenticated gateway endpoints. */
-export const BEARER_TOKEN = process.env.HERMES_API_TOKEN || process.env.CLAUDE_API_TOKEN || ''
+export const BEARER_TOKEN =
+  process.env.HERMES_API_TOKEN || process.env.CLAUDE_API_TOKEN || ''
 
 /**
  * Optional explicit bearer token for dashboard API calls.
@@ -255,8 +265,9 @@ export const BEARER_TOKEN = process.env.HERMES_API_TOKEN || process.env.CLAUDE_A
  * /api/sessions, /api/skills, etc. against the official dashboard. If
  * CLAUDE_DASHBOARD_TOKEN isn't set, leave this empty and let
  * fetchDashboardToken() fall through to the HTML-scrape legacy path.
- */
-const DASHBOARD_BEARER_TOKEN = process.env.HERMES_DASHBOARD_TOKEN || process.env.CLAUDE_DASHBOARD_TOKEN || ''
+*/
+const DASHBOARD_BEARER_TOKEN =
+  process.env.HERMES_DASHBOARD_TOKEN || process.env.CLAUDE_DASHBOARD_TOKEN || ''
 
 function authHeaders(): Record<string, string> {
   return BEARER_TOKEN ? { Authorization: `Bearer ${BEARER_TOKEN}` } : {}
