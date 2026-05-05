@@ -4,9 +4,9 @@ import { formatTaskAssigneeLabel } from './task-card'
 import { TASKS_BOARD_HELP_TEXT } from './tasks-screen'
 
 describe('tasks UX copy', () => {
-  it('exposes helper copy that explains drag and assignment behavior', () => {
+  it('exposes helper copy that flags the page as the legacy local queue', () => {
     expect(TASKS_BOARD_HELP_TEXT).toBe(
-      'Drag cards to change status. Open a card to set assignee and due date.',
+      'Legacy local queue only. Drag cards to change status, but use the Swarm Board for canonical Hermes dispatch state.',
     )
   })
 

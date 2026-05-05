@@ -6,7 +6,7 @@ The release promise is simple:
 
 - Unlimited Hermes Agents can exist.
 - One orchestrator translates intent into dispatch.
-- Zero humans have to manually route every task.
+- With orchestrator wiring in place, humans do not have to manually route every task.
 - Every worker has a role, a profile, a mission, and a checkpoint contract.
 - Every risky action still routes through the Greenlight Gate.
 
@@ -43,6 +43,8 @@ The Swarm surface shows workers as operational cards: role, state, current task,
 
 The TaskBoard gives the swarm a planning surface: backlog, ready, running, review, blocked, done. It is intentionally boring. Boring task state beats a beautiful graveyard of half-finished chats.
 
+Important: the TaskBoard is not, by itself, a background scheduler. It reflects and organizes work; it does not guarantee that a local orchestrator loop is already running forever on your host.
+
 ### Reports + Inbox
 
 Reports and Inbox are where the swarm becomes reviewable. Checkpoints with `NEEDS_REVIEW`, blockers, handoffs, and escalation-worthy summaries land here so Eric can approve the few things that need judgment.
@@ -73,6 +75,8 @@ The workspace gives you three levels of control:
 3. Drop into the worker runtime only when you need exact evidence.
 
 You should not need to babysit every step. You should be able to ask for a release doc pass, see the docs worker take it, watch the checkpoint land, send the reviewer lane next, and approve the PR only when the review says it is real.
+
+On hosts without tmux, worker wrappers, or an explicit orchestrator-loop runner, the experience may degrade to one-shot dispatch plus manual follow-up. That is setup drift, not magic autonomy.
 
 ## What Swarm Mode is good at
 

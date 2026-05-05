@@ -6,129 +6,209 @@ Common setup issues and how to fix them.
 
 ## 1. Gateway starts but API server never binds (port 8642 not listening)
 
-**Symptom:** `hermes gateway run` appears to start, but `curl http://127.0.0.1:8642/health` fails. `ss -tlnp | grep 8642` shows nothing.
+**Symptom:** `hermes gateway run` appears to start, but `curl http://127.0.0.1:8642/health` fails.
 
-**Cause:** `API_SERVER_ENABLED` is not set — or is set with the wrong env var name.
-
-**Fix:**
-
-```bash
-# Find your claude env file
-claude config env-path
-# Usually: ~/.hermes/.env
-
-# Check for the key
-grep -i API_SERVER ~/.hermes/.env
-```
-
-The env var must be **exactly** `API_SERVER_ENABLED=true` — with underscores. Common mistakes:
-
-| Wrong | Right |
-|---|---|
-| `APISERVERENABLED=true` | `API_SERVER_ENABLED=true` |
-| `APISERVERHOST=0.0.0.0` | `API_SERVER_HOST=127.0.0.1` |
-| `ApiServerEnabled=true` | `API_SERVER_ENABLED=true` |
-
-After fixing, restart the gateway: `hermes gateway run --replace`
-
-**Also:** setting `API_SERVER_HOST=0.0.0.0` without `API_SERVER_KEY` causes a silent refusal. Use `127.0.0.1` for local access, or set a key for network access.
-
----
-
-## 2. Workspace shows "Connect Backend" / "Skip setup" (mode=disconnected)
-
-**Symptom:** Browser shows the onboarding welcome screen instead of the chat UI. Dev server logs show `mode=disconnected`.
-
-**Cause:** Workspace can't reach the gateway HTTP API.
-
-**Checklist (in order):**
-
-1. Is the gateway running? `pgrep -af "claude.*gateway"`
-2. Is port 8642 bound? `curl -sf http://127.0.0.1:8642/health`
-3. Is Workspace `.env` correct? `grep HERMES_API_URL ~/hermes-workspace/.env`
-   - Should be: `HERMES_API_URL=http://127.0.0.1:8642`
-4. Restart Workspace: `pnpm dev`
-
-If the gateway is running and healthy but Workspace still disconnects, check for port conflicts (another process on 8642) or firewall rules.
-
----
-
-## 3. Port 8642 already in use
-
-**Symptom:** Gateway fails to start with "Address already in use" or silently exits.
+**Cause:** `API_SERVER_ENABLED` is missing or typoed.
 
 **Fix:**
 
 ```bash
-# Find what's using the port
-lsof -i :8642    # macOS
-ss -tlnp | grep 8642   # Linux
-
-# Kill the stale process
-kill <PID>
-
-# Restart
-hermes gateway run --replace
+HERMES_ENV="$(hermes config env-path 2>/dev/null || echo "$HOME/.hermes/.env")"
+grep -i API_SERVER "$HERMES_ENV"
 ```
 
----
+The env var must be **exactly** `API_SERVER_ENABLED=true`.
+Common mistakes:
 
-## 4. WSL: Gateway health check times out on first boot
+- `APISERVERENABLED=true` → wrong
+- `APISERVERHOST=0.0.0.0` → wrong key name
+- `API_SERVER_HOST=0.0.0.0` without `API_SERVER_KEY` → unsafe and may refuse to bind
 
-**Symptom:** Workspace starts, checks the gateway, reports "disconnected". But if you wait 15 seconds and refresh, it works.
-
-**Cause:** Python cold-start on WSL is slower (8–15s) due to filesystem overhead. Workspace's health check times out before the gateway is ready.
-
-**Fix:** Start in two separate terminals:
+After fixing, restart the gateway:
 
 ```bash
-# Terminal 1 — start gateway first, wait for it
 hermes gateway run
-# Wait until you see "Uvicorn running on http://127.0.0.1:8642"
-
-# Terminal 2 — then start workspace
-cd ~/hermes-workspace && pnpm dev
+# or
+systemctl --user restart hermes-gateway.service
 ```
 
 ---
 
-## 5. Dev server crashes immediately after boot
+## 2. Workspace shows "Connect Backend" / "Skip setup" (`mode=disconnected`)
 
-**Symptom:** `pnpm dev` starts, shows the Vite banner, then crashes with ELIFECYCLE or a stack trace.
+**Symptom:** Browser shows onboarding instead of the normal Workspace UI.
 
-**Common causes:**
+**Cause:** Workspace cannot reach the Hermes gateway HTTP API.
 
-- **Merge conflict markers in source files:** `grep -r "<<<<<<" src/` — if you find any, resolve them or `git checkout -- <file>`.
-- **Missing node_modules:** `pnpm install`
-- **Node version too old:** `node --version` — requires Node 22+.
-- **Port already in use:** `lsof -i :3000` (macOS) or `ss -tlnp | grep 3000` (Linux) — kill the stale process.
+**Checklist:**
+
+1. `hermes gateway status`
+2. `curl -sf http://127.0.0.1:8642/health`
+3. `grep HERMES_API_URL ~/hermes-workspace/.env`
+4. restart Workspace
+
+Expected:
+
+```text
+HERMES_API_URL=http://127.0.0.1:8642
+```
 
 ---
 
-## 6. "No compatible backend detected" in onboarding
+## 3. `hermes` works in shell, but Workspace worker dispatch still fails
 
-**Symptom:** Clicked "Connect Backend", health check runs, shows error.
+**Symptom:** Interactive shell can run `hermes`, but Workspace one-shot dispatches or tmux worker launches fail.
 
-This means the Vite SSR server tried `GET /api/gateway-status` which internally probes the gateway. The probe failed.
+**Cause:** the Workspace service/runtime PATH does not include `~/.local/bin`.
 
-**Most likely:** the gateway API server isn't running. See issue #1 above.
+**Fix:** ensure the service PATH includes it.
 
-**Less likely:** `.env` has the wrong `HERMES_API_URL` (e.g. wrong port, `https` instead of `http`, `localhost` instead of `127.0.0.1` on WSL).
+Example systemd service fragment:
+
+```text
+Environment=PATH=/home/<user>/.local/bin:/usr/local/bin:/usr/bin:/bin
+```
+
+Then reload and restart:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user restart hermes-workspace.service
+```
+
+---
+
+## 4. Kanban view returns 500 / blank board
+
+**Symptom:** `/api/swarm-kanban` errors, Kanban board fails to load, or logs show `spawnSync sqlite3 ENOENT`.
+
+**Cause:** `sqlite3` binary is missing on the host.
+
+**Important:** the database file can exist at `~/.hermes/kanban.db` and still fail if the binary is missing.
+
+**Fix:**
+
+```bash
+sqlite3 --version
+# if missing:
+sudo apt-get update && sudo apt-get install -y sqlite3
+```
+
+Re-test:
+
+```bash
+curl -sS http://127.0.0.1:3000/api/swarm-kanban
+```
+
+---
+
+## 5. Swarm worker card exists but persistent worker does not start
+
+**Symptom:** Runtime card exists, but there is no live tmux-backed worker.
+
+**Most common causes:**
+
+- `tmux` is not installed
+- worker profile does not exist under `~/.hermes/profiles/<workerId>/`
+- worker wrapper does not exist under `~/.local/bin/<workerId>`
+- Workspace runtime PATH cannot see `hermes`
+
+**Checks:**
+
+```bash
+tmux -V
+ls ~/.hermes/profiles/<workerId>
+ls ~/.local/bin/<workerId>
+tmux ls
+```
+
+Expected tmux session name:
+
+```text
+swarm-<workerId>
+```
+
+---
+
+## 6. One-shot dispatch works, but tmux-backed Swarm still feels half-alive
+
+**Cause:** Workspace can fall back to one-shot `hermes chat -q ...` delivery even when persistent worker wiring is incomplete.
+
+That means:
+- dispatch can appear to work
+- reports can appear to work
+- runtime card can still exist
+- but the "persistent worker" experience is not fully there yet
+
+For the full Swarm lane, you need all of:
+- `hermes` on runtime PATH
+- `tmux`
+- worker profile
+- worker wrapper
+
+---
+
+## 7. "Kanban motoren" does not move cards by itself
+
+**Symptom:** The board loads, but nothing autonomously advances without manual dispatch or explicit loop execution.
+
+**Cause:** the board is a planning/control surface, not a guaranteed always-on scheduler.
+
+Verified current truth:
+- `/api/swarm-orchestrator-loop` exists
+- dispatch/runtime/report plumbing exists
+- background self-scheduling is not guaranteed on a fresh install
+
+So if you want true autopilot, wire it deliberately as local ops behavior. Do not assume the board itself is the engine.
+
+---
+
+## 8. WSL / service startup is inconsistent
+
+**Symptom:** Gateway or Workspace behaves differently in terminal vs systemd.
+
+**Common reasons:**
+
+- different PATH
+- different `HOME`
+- different active profile env
+- service sees `~/.hermes/...`, shell sees something else
+
+**Checks:**
+
+```bash
+systemctl --user show hermes-workspace.service --property=Environment --no-pager
+systemctl --user show hermes-gateway.service --property=Environment --no-pager
+hermes config env-path
+```
+
+---
+
+## 9. Legacy Claude wording is confusing setup
+
+**Symptom:** Docs/logs mention `claude`, but the install actually uses Hermes Agent.
+
+**Truth:** some Claude-era names remain as compatibility residue in docs, env aliases, route/file names, and log labels.
+
+Use this rule:
+- prefer `hermes`
+- prefer `HERMES_HOME`
+- prefer `~/.hermes`
+- treat `claude` wording as legacy unless the doc explicitly says it is compatibility behavior
 
 ---
 
 ## Diagnostic bundle
 
-If nothing above helps, run this and share the output:
-
 ```bash
-echo "=== claude version ===" && claude --version 2>&1
-echo "=== claude env path ===" && claude config env-path 2>&1
-echo "=== claude env (redacted) ===" && grep -E "^(API_SERVER|CLAUDE_)" "$(claude config env-path 2>/dev/null || echo ~/.hermes/.env)" 2>&1
-echo "=== gateway process ===" && pgrep -af "claude.*gateway" 2>&1 || echo "not running"
+echo "=== hermes version ===" && hermes --version 2>&1
+echo "=== hermes env path ===" && hermes config env-path 2>&1
+echo "=== gateway status ===" && hermes gateway status 2>&1
 echo "=== port 8642 ===" && (ss -tlnp 2>/dev/null || lsof -iTCP:8642 -sTCP:LISTEN 2>/dev/null) | grep 8642 || echo "not bound"
 echo "=== health check ===" && curl -sf http://127.0.0.1:8642/health 2>&1 || echo "not reachable"
-echo "=== workspace .env ===" && grep CLAUDE ~/hermes-workspace/.env 2>&1 || echo "no .env"
+echo "=== workspace .env ===" && grep HERMES_API_URL ~/hermes-workspace/.env 2>&1 || echo "no .env"
+echo "=== tmux ===" && tmux -V 2>&1
+echo "=== sqlite3 ===" && sqlite3 --version 2>&1
 echo "=== OS ===" && uname -a
 echo "=== Node ===" && node --version
 echo "=== Python ===" && python3 --version 2>&1

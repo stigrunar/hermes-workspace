@@ -14,6 +14,6 @@ export const Route = createFileRoute('/tasks')({
 })
 
 function TasksRoute() {
-  usePageTitle('Tasks')
+  usePageTitle('Legacy task queue')
   return <TasksScreen />
 }

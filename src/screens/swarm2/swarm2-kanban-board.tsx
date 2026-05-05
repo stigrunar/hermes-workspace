@@ -95,6 +95,8 @@ const LANES: Array<{ id: KanbanLane; label: string; hint: string }> = [
   { id: 'done', label: 'Done', hint: 'Accepted / archived' },
 ]
 
+const EDITABLE_LANES = LANES.filter((lane) => lane.id !== 'running')
+
 const LANE_TONE: Record<KanbanLane, string> = {
   backlog: 'border-slate-400/40 bg-slate-500/10 text-slate-700',
   ready: 'border-blue-400/40 bg-blue-500/10 text-blue-700',
@@ -256,7 +258,7 @@ export function Swarm2KanbanBoard({
           <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--theme-muted)]">Manual planning</div>
           <h2 className="mt-1 text-lg font-semibold text-[var(--theme-text)]">Swarm Board</h2>
           <p className="mt-1 max-w-3xl text-xs leading-relaxed text-[var(--theme-muted-2)]">
-            Auto-detects the shared Kanban store by default; if it is unavailable, cards stay in a local fallback. Dispatch stays explicit through Router.
+            Auto-detects the shared Kanban store by default; if it is unavailable, cards stay in a local fallback. Dispatch stays explicit through Router, and canonical tasks enter Running only when the dispatcher claims them.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--theme-muted)]">
@@ -318,7 +320,7 @@ export function Swarm2KanbanBoard({
               <div>
                 <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--theme-muted)]">Manual planning</div>
                 <h3 className="mt-1 text-lg font-semibold text-[var(--theme-text)]">New board card</h3>
-                <p className="mt-1 text-xs text-[var(--theme-muted-2)]">Spec work before routing it to an agent. Dispatch stays explicit through Router.</p>
+                <p className="mt-1 text-xs text-[var(--theme-muted-2)]">Spec work before routing it to an agent. Dispatch stays explicit through Router; canonical tasks start in Ready and switch to Running only after claim.</p>
               </div>
               <button type="button" onClick={() => setComposerOpen(false)} className="rounded-lg border border-[var(--theme-border)] bg-[var(--theme-card2)] px-3 py-1.5 text-sm text-[var(--theme-muted)] hover:text-[var(--theme-text)]">Close</button>
             </div>
@@ -352,7 +354,7 @@ export function Swarm2KanbanBoard({
               <label className="block text-xs">
                 <span className="mb-1 block font-semibold text-[var(--theme-muted)]">Status</span>
                 <select value={draftStatus} onChange={(event) => setDraftStatus(event.target.value as KanbanLane)} className="w-full rounded-xl border border-[var(--theme-border)] bg-[var(--theme-bg)] px-3 py-2 text-sm text-[var(--theme-text)] outline-none">
-                  {LANES.map((lane) => <option key={lane.id} value={lane.id}>{lane.label}</option>)}
+                  {EDITABLE_LANES.map((lane) => <option key={lane.id} value={lane.id}>{lane.label}</option>)}
                 </select>
               </label>
               <label className="flex items-center gap-2 self-end rounded-xl border border-[var(--theme-border)] bg-[var(--theme-bg)] px-3 py-2 text-xs text-[var(--theme-muted)]">
@@ -416,7 +418,7 @@ export function Swarm2KanbanBoard({
                       {card.assignedWorker ? (
                         <button type="button" onClick={() => onSelectWorker?.(card.assignedWorker!)} className="rounded-full border border-[var(--theme-border)] px-2 py-1 text-[10px] font-semibold text-[var(--theme-muted)] hover:bg-[var(--theme-card2)] hover:text-[var(--theme-text)]">Open worker</button>
                       ) : null}
-                      {card.status !== 'running' ? <button type="button" onClick={() => updateMutation.mutate({ id: card.id, updates: { status: 'running' } })} className="rounded-full border border-[var(--theme-border)] px-2 py-1 text-[10px] font-semibold text-[var(--theme-muted)] hover:bg-[var(--theme-card2)] hover:text-[var(--theme-text)]">Run</button> : null}
+                      {card.status !== 'ready' && card.status !== 'running' ? <button type="button" onClick={() => updateMutation.mutate({ id: card.id, updates: { status: 'ready' } })} className="rounded-full border border-[var(--theme-border)] px-2 py-1 text-[10px] font-semibold text-[var(--theme-muted)] hover:bg-[var(--theme-card2)] hover:text-[var(--theme-text)]">Ready</button> : null}
                       {card.status !== 'review' ? <button type="button" onClick={() => updateMutation.mutate({ id: card.id, updates: { status: 'review' } })} className="rounded-full border border-[var(--theme-border)] px-2 py-1 text-[10px] font-semibold text-[var(--theme-muted)] hover:bg-[var(--theme-card2)] hover:text-[var(--theme-text)]">Review</button> : null}
                       {card.status !== 'done' ? <button type="button" onClick={() => updateMutation.mutate({ id: card.id, updates: { status: 'done' } })} className="rounded-full border border-[var(--theme-border)] px-2 py-1 text-[10px] font-semibold text-[var(--theme-muted)] hover:bg-[var(--theme-card2)] hover:text-[var(--theme-text)]">Done</button> : null}
                       {onOpenRouter ? <button type="button" onClick={onOpenRouter} className="rounded-full border border-[var(--theme-accent)] bg-[var(--theme-accent-soft)] px-2 py-1 text-[10px] font-semibold text-[var(--theme-accent-strong)]">Router</button> : null}

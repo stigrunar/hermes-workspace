@@ -28,7 +28,7 @@ const QUERY_KEY = ['claude', 'tasks'] as const
 const ASSIGNEES_KEY = ['claude', 'tasks', 'assignees'] as const
 
 export const TASKS_BOARD_HELP_TEXT =
-  'Drag cards to change status. Open a card to set assignee and due date.'
+  'Legacy local queue only. Drag cards to change status, but use the Swarm Board for canonical Hermes dispatch state.'
 
 function SkeletonCard() {
   return (
@@ -181,7 +181,7 @@ export function TasksScreen() {
       <header className="rounded-2xl border border-primary-200 bg-primary-50/85 p-4 backdrop-blur-xl">
         <div className="flex items-center justify-between">
         <div className="flex items-center gap-3 min-w-0">
-          <h1 className="text-2xl font-medium text-ink">Tasks</h1>
+          <h1 className="text-2xl font-medium text-ink">Legacy task queue</h1>
           {assigneeFilter && (
             <div className="flex items-center gap-2 text-xs text-[var(--theme-muted)]">
               <span>Filtered by: <span className="capitalize" style={{ color: '#f59e0b' }}>{assigneeFilter}</span></span>

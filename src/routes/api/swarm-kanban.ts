@@ -36,8 +36,12 @@ export const Route = createFileRoute('/api/swarm-kanban')({
         if (!parsed.success) {
           return json({ ok: false, error: parsed.error.issues.map((issue) => issue.message).join('; ') }, { status: 400 })
         }
-        const card = createKanbanCard(parsed.data)
-        return json({ ok: true, card, backend: getKanbanBackendMeta() })
+        try {
+          const card = createKanbanCard(parsed.data)
+          return json({ ok: true, card, backend: getKanbanBackendMeta() })
+        } catch (error) {
+          return json({ ok: false, error: error instanceof Error ? error.message : 'Failed to create card' }, { status: 400 })
+        }
       },
       PATCH: async ({ request }) => {
         let body: unknown
@@ -51,9 +55,13 @@ export const Route = createFileRoute('/api/swarm-kanban')({
           return json({ ok: false, error: parsed.error.issues.map((issue) => issue.message).join('; ') }, { status: 400 })
         }
         const { id, ...updates } = parsed.data
-        const card = updateKanbanCard(id, updates)
-        if (!card) return json({ ok: false, error: 'Card not found' }, { status: 404 })
-        return json({ ok: true, card, backend: getKanbanBackendMeta() })
+        try {
+          const card = updateKanbanCard(id, updates)
+          if (!card) return json({ ok: false, error: 'Card not found' }, { status: 404 })
+          return json({ ok: true, card, backend: getKanbanBackendMeta() })
+        } catch (error) {
+          return json({ ok: false, error: error instanceof Error ? error.message : 'Failed to update card' }, { status: 400 })
+        }
       },
     },
   },

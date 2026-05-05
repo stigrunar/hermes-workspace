@@ -12,47 +12,53 @@ Use these names in all new UI, docs, skills, prompts, tests, review comments, an
 - **Hermes Kanban**
 - **HERMES_HOME**
 - `~/.hermes`
-
-## Forbidden new references
-
-Do **not** introduce these in new work unless quoting legacy history or compatibility behavior:
-
-- Hermes Workspace
-- Hermes Agent
-- Claude swarm
-- Claude-native paths
-- `HERMES_HOME`
-- `~/.hermes`
+- `hermes` (CLI)
 
 ## Legacy compatibility rule
 
-If older code, docs, tests, or handoffs contain Claude-era wording, treat it as legacy residue.
+Older code and docs still contain Claude-era wording.
+Treat that as compatibility residue, not as the preferred naming.
 
 Default action:
-- normalize it to Claude naming
-- preserve old wording only when explicitly documenting migration or backwards compatibility
+- normalize new work to Hermes naming
+- preserve Claude wording only when documenting legacy behavior, migrations, env aliases, or old log strings
+- do not introduce fresh Claude branding into new user-facing text unless it is explicitly labeled legacy
+
+## Allowed legacy references
+
+These may still appear when describing compatibility behavior:
+
+- `CLAUDE_HOME` as a legacy env alias
+- `CLAUDE_*` env vars that are still accepted by runtime code
+- `[claude-api]` or similar existing log labels
+- `claude` as a historical CLI alias if a host still ships it
+
+When you mention them, make the Hermes-first meaning explicit.
 
 ## Runtime/path rules
 
-For Claude-native runtime work, prefer:
+For live runtime guidance, prefer:
 
 - `HERMES_HOME`
 - `~/.hermes/profiles/<workerId>`
-- `claude`
+- `hermes`
 - Hermes worker sessions
+- Hermes/OpenAI Codex or other provider labels as configured in profile `config.yaml`
 
-Do not suggest Claude-specific runtime wrappers or profile paths for live Hermes Workspace behavior.
+Avoid suggesting Claude-specific profile paths or Claude-branded setup as the primary path for Hermes Workspace.
 
 ## Swarm/UI language rules
 
 Prefer:
-- **Ready** not person-specific hardcoded labels
-- **Board / Cards / List** for reports views
+- **Ready** instead of person-specific lane labels
+- **Board / Cards / List** for planning surfaces
 - **Hermes Workspace** and **Hermes Agent** in update/config/status UI
+- **OpenAI Codex** when the provider/model is actually Codex-backed
 
 Avoid:
 - person-specific product labels baked into UI
-- Claude-branded wording in Hermes Workspace surfaces
+- new Claude-branded wording in Hermes Workspace surfaces
+- claiming Claude is required when Hermes runtime is what actually executes the work
 
 ## Reviewer rule
 
@@ -60,11 +66,12 @@ Any PR or patch that introduces new Claude-branded naming into Hermes Workspace 
 - a legacy compatibility note
 - a migration guide
 - a quoted historical artifact
+- a code-level alias required to keep old installs working
 
 ## Agent instruction rule
 
 When an agent is working in this repo:
-- assume Claude naming is canonical
-- rewrite Claude-era references to Claude by default
-- do not invent Claude-branded paths, products, or wrapper guidance
-- if uncertain, prefer repo-native Claude terminology over historical aliases
+- assume Hermes naming is canonical
+- rewrite Claude-era references to Hermes by default
+- keep legacy aliases only where they explain compatibility behavior truthfully
+- prefer repo-native Hermes terminology over historical aliases when uncertain

@@ -192,26 +192,29 @@ describe('kanban-backend', () => {
     expect(mod.listKanbanCards()[0]?.id).toBe('local-1')
   })
 
-  it('creates and updates Hermes tasks through canonical kanban.db path', async () => {
+  it('creates canonical tasks as todo/backlog and clears run pointers when leaving running', async () => {
     vi.stubEnv('CLAUDE_HOME', '/home/openclaw/.hermes/profiles/swarm2')
     const sqliteCalls: string[] = []
-    let readCount = 0
+    let taskReadCount = 0
     const mod = await loadKanbanBackend({
       existsSync: (target) => target === '/home/openclaw/.hermes/kanban.db' || target === '/home/openclaw/.hermes/kanban',
       execFileSync: (command, args = []) => {
         if (command === 'which' && args[0] === 'claude') return '/Users/aurora/.local/bin/claude\n'
         if (command === '/Users/aurora/.local/bin/claude' && args[0] === '--version') return 'claude 1.0.0\n'
         if (command === 'sqlite3') {
-          sqliteCalls.push(args.join(' '))
           const sql = args[2] ?? ''
-          if (sql.includes('where id =')) {
-            readCount += 1
+          sqliteCalls.push(sql)
+          if (sql.includes('select id, status, current_run_id from tasks')) {
+            return JSON.stringify([{ id: 't_deadbeef', status: 'running', current_run_id: 42 }])
+          }
+          if (sql.includes('select id, title, body, status, assignee, created_at')) {
+            taskReadCount += 1
             return JSON.stringify([
               {
                 id: 't_deadbeef',
-                title: readCount === 1 ? 'Created Hermes task' : 'Updated Hermes task',
+                title: taskReadCount === 1 ? 'Created Hermes task' : 'Updated Hermes task',
                 body: 'Task body',
-                status: readCount === 1 ? 'queued' : 'done',
+                status: taskReadCount === 1 ? 'todo' : 'done',
                 assignee: 'swarm6',
                 created_at: 1777527540,
                 updated_at: 1777527644,
@@ -229,8 +232,34 @@ describe('kanban-backend', () => {
 
     expect(created).toMatchObject({ id: 't_deadbeef', title: 'Created Hermes task', status: 'backlog', assignedWorker: 'swarm6', createdBy: 'claude-kanban' })
     expect(updated).toMatchObject({ id: 't_deadbeef', title: 'Updated Hermes task', status: 'done', assignedWorker: 'swarm6' })
-    expect(sqliteCalls.every((call) => call.startsWith('/home/openclaw/.hermes/kanban.db '))).toBe(true)
-    expect(sqliteCalls.some((call) => call.includes('insert into tasks'))).toBe(true)
-    expect(sqliteCalls.some((call) => call.includes('update tasks set'))).toBe(true)
+    expect(sqliteCalls.some((call) => call.includes("insert into tasks"))).toBe(true)
+    expect(sqliteCalls.some((call) => call.includes("'todo'"))).toBe(true)
+    expect(sqliteCalls.some((call) => call.includes('update task_runs set'))).toBe(true)
+    expect(sqliteCalls.some((call) => call.includes('current_run_id = NULL'))).toBe(true)
+  })
+
+  it('rejects manual canonical Running transitions from the workspace', async () => {
+    vi.stubEnv('CLAUDE_HOME', '/home/openclaw/.hermes/profiles/swarm2')
+    const mod = await loadKanbanBackend({
+      existsSync: (target) => target === '/home/openclaw/.hermes/kanban.db' || target === '/home/openclaw/.hermes/kanban',
+      execFileSync: (command, args = []) => {
+        if (command === 'which' && args[0] === 'claude') return '/Users/aurora/.local/bin/claude\n'
+        if (command === '/Users/aurora/.local/bin/claude' && args[0] === '--version') return 'claude 1.0.0\n'
+        if (command === 'sqlite3') {
+          const sql = args[2] ?? ''
+          if (sql.includes('select id, status, current_run_id from tasks')) {
+            return JSON.stringify([{ id: 't_deadbeef', status: 'ready', current_run_id: null }])
+          }
+          if (sql.includes('where id =')) {
+            return JSON.stringify([{ id: 't_deadbeef', title: 'Ready task', body: '', status: 'ready', assignee: null, created_at: 1, updated_at: 1 }])
+          }
+          return '[]'
+        }
+        throw new Error(`Unexpected command: ${command} ${args.join(' ')}`)
+      },
+    })
+
+    expect(() => mod.createKanbanCard({ title: 'No direct running', status: 'running' })).toThrow(/cannot create canonical Hermes tasks directly in Running/i)
+    expect(() => mod.updateKanbanCard('t_deadbeef', { status: 'running' })).toThrow(/cannot mark canonical Hermes tasks as running directly/i)
   })
 })

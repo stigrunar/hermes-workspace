@@ -10,9 +10,11 @@ You need:
 - pnpm
 - git
 - tmux for persistent TUI-backed workers
+- sqlite3 for the canonical Hermes Kanban board (`~/.hermes/kanban.db`)
 - a configured Hermes Agent profile under `~/.hermes/profiles/`
 
 The workspace can still render without tmux, but tmux is what makes the worker sessions feel alive instead of one-shot and disposable.
+Without `sqlite3`, Kanban can fail even when the board database exists on disk.
 
 ## 1. Clone the workspace
 
@@ -157,6 +159,8 @@ The Inbox is where the swarm asks for judgment instead of trying to be brave in 
 
 Switch to Kanban view for planning. The board is useful when you want a visual queue but still want dispatch to happen through the orchestrator.
 
+Important: the TaskBoard is a planning/control surface, not a guaranteed always-on scheduler. Loading cards into Kanban does not by itself create a background loop that keeps dispatching work forever.
+
 Recommended lane meanings:
 
 | Lane | Meaning |
@@ -167,6 +171,8 @@ Recommended lane meanings:
 | Review | Needs reviewer or Eric. |
 | Blocked | Needs repair, input, auth, or scope cut. |
 | Done | Verified checkpoint landed. |
+
+If you want true autopilot behavior, wire `/api/swarm-orchestrator-loop` or equivalent local orchestration intentionally. Do not assume the board itself is the engine.
 
 ## 9. Add a worker with role presets
 
@@ -197,6 +203,7 @@ Before trusting a new worker:
 - The worker returns the canonical checkpoint format.
 - Reports shows the checkpoint.
 - The orchestrator can route the next action.
+- If you want persistent workers instead of one-shot dispatches, tmux + worker wrapper/profile wiring is present.
 
 ## 11. Common fixes
 

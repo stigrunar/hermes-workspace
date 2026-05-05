@@ -39,6 +39,7 @@ type ClaudeTaskRow = {
   body?: string | null
   status?: string | null
   assignee?: string | null
+  current_run_id?: number | string | null
   created_at?: number | string | null
   updated_at?: number | string | null
 }
@@ -156,6 +157,19 @@ function readClaudeTask(taskId: string): ClaudeTaskRow | null {
   return Array.isArray(parsed) && parsed[0] ? parsed[0] : null
 }
 
+function readClaudeTaskState(taskId: string): Pick<ClaudeTaskRow, 'id' | 'status' | 'current_run_id'> | null {
+  const detection = detectClaudeKanban()
+  if (!detection.available) return null
+  const raw = runSqlite(
+    detection.dbPath,
+    `select id, status, current_run_id from tasks where id = ${sqliteQuote(taskId)} limit 1;`,
+  )
+  const parsed = raw
+    ? (JSON.parse(raw) as Array<Pick<ClaudeTaskRow, 'id' | 'status' | 'current_run_id'>>)
+    : []
+  return Array.isArray(parsed) && parsed[0] ? parsed[0] : null
+}
+
 function normalizeTimestamp(value: unknown): number {
   if (typeof value === 'number' && Number.isFinite(value)) {
     return value > 1_000_000_000_000 ? value : Math.round(value * 1000)
@@ -197,7 +211,7 @@ function mapClaudeStatus(status: string | null | undefined): SwarmKanbanCard['st
 function mapBoardStatus(status: SwarmKanbanCard['status'] | null | undefined): string {
   switch (status) {
     case 'backlog':
-      return 'queued'
+      return 'todo'
     case 'ready':
       return 'ready'
     case 'running':
@@ -209,8 +223,48 @@ function mapBoardStatus(status: SwarmKanbanCard['status'] | null | undefined): s
     case 'done':
       return 'done'
     default:
-      return 'queued'
+      return 'todo'
   }
+}
+
+function closeRunningRunSql(taskId: string, runId: number, nextStatus: string, nowSeconds: number): string {
+  return [
+    'update task_runs set',
+    `status = ${sqliteQuote(nextStatus === 'done' ? 'done' : 'reclaimed')},`,
+    `outcome = ${sqliteQuote(nextStatus === 'done' ? 'completed' : 'reclaimed')},`,
+    `summary = coalesce(summary, ${sqliteQuote(`status changed to ${nextStatus} (workspace)`)}),`,
+    `ended_at = ${nowSeconds},`,
+    'claim_lock = NULL,',
+    'claim_expires = NULL,',
+    'worker_pid = NULL',
+    `where id = ${Number(runId)} and ended_at is null;`,
+  ].join(' ')
+}
+
+function updateClaudeTaskStatus(cardId: string, nextStatus: SwarmKanbanCard['status']): void {
+  const detection = detectClaudeKanban()
+  if (!detection.available) throw new Error('Hermes Kanban not detected')
+  const current = readClaudeTaskState(cardId)
+  if (!current) throw new Error(`Hermes task ${cardId} was not found`)
+  const currentStatus = mapClaudeStatus(current.status)
+  if (currentStatus === nextStatus) return
+  if (nextStatus === 'running') {
+    throw new Error('Workspace cannot mark canonical Hermes tasks as running directly. Move the card to Ready and let the dispatcher claim it.')
+  }
+
+  const nowSeconds = Math.floor(Date.now() / 1000)
+  const nextTaskStatus = mapBoardStatus(nextStatus)
+  const statements: string[] = ['begin immediate;']
+
+  if (currentStatus === 'running' && current.current_run_id) {
+    statements.push(closeRunningRunSql(cardId, Number(current.current_run_id), nextTaskStatus, nowSeconds))
+  }
+
+  statements.push(
+    `update tasks set status = ${sqliteQuote(nextTaskStatus)}, claim_lock = NULL, claim_expires = NULL, worker_pid = NULL, current_run_id = NULL, ${nextTaskStatus === 'done' ? `completed_at = ${nowSeconds}` : 'completed_at = NULL'} where id = ${sqliteQuote(cardId)};`,
+    'commit;',
+  )
+  runSqlite(detection.dbPath, statements.join(' '))
 }
 
 function claudeTaskToCard(task: ClaudeTaskRow): SwarmKanbanCard {
@@ -278,9 +332,13 @@ const claudeBackend: KanbanBackend = {
   create(input) {
     const detection = detectClaudeKanban()
     if (!detection.available) throw new Error(detection.reason ?? 'Hermes Kanban not detected')
+    const requestedStatus = input.status ?? 'backlog'
+    if (requestedStatus === 'running') {
+      throw new Error('Workspace cannot create canonical Hermes tasks directly in Running. Create them as Ready and let the dispatcher claim them.')
+    }
     const nowSeconds = Math.floor(Date.now() / 1000)
     const taskId = `t_${randomUUID().replace(/-/g, '').slice(0, 8)}`
-    const status = mapBoardStatus(input.status ?? 'backlog')
+    const status = mapBoardStatus(requestedStatus)
     const statements = [
       'insert into tasks (',
       'id, title, body, assignee, status, priority, created_by, created_at, workspace_kind, workspace_path',
@@ -311,18 +369,17 @@ const claudeBackend: KanbanBackend = {
     if (typeof updates.title === 'string' && updates.title.trim()) assignments.push(`title = ${sqliteQuote(updates.title.trim())}`)
     if (typeof updates.spec === 'string') assignments.push(`body = ${sqliteQuote(updates.spec)}`)
     if (updates.assignedWorker !== undefined) assignments.push(`assignee = ${updates.assignedWorker?.trim() ? sqliteQuote(updates.assignedWorker.trim()) : 'NULL'}`)
-    if (updates.status) {
-      const status = mapBoardStatus(updates.status)
-      assignments.push(`status = ${sqliteQuote(status)}`)
-      if (status === 'running') assignments.push(`started_at = coalesce(started_at, ${Math.floor(Date.now() / 1000)})`)
-      if (status === 'done') assignments.push(`completed_at = ${Math.floor(Date.now() / 1000)}`)
-      if (status !== 'done') assignments.push('completed_at = NULL')
+    const nextStatus = updates.status
+    if (assignments.length > 0) {
+      runSqlite(detection.dbPath, `update tasks set ${assignments.join(', ')} where id = ${sqliteQuote(cardId)};`)
     }
-    if (assignments.length === 0) {
+    if (nextStatus) {
+      updateClaudeTaskStatus(cardId, nextStatus)
+    }
+    if (assignments.length === 0 && !nextStatus) {
       const current = readClaudeTask(cardId)
       return current ? claudeTaskToCard(current) : null
     }
-    runSqlite(detection.dbPath, `update tasks set ${assignments.join(', ')} where id = ${sqliteQuote(cardId)};`)
     const updated = readClaudeTask(cardId)
     return updated ? claudeTaskToCard(updated) : null
   },

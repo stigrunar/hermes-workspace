@@ -1,288 +1,241 @@
-# Agent Pairing Guide — Workspace ↔ Claude Gateway
+# Agent Pairing Guide — Workspace ↔ Hermes Gateway
 
-> **Audience:** AI agents helping users set up Hermes Workspace.
-> Run these steps in order. Each step has a verification command — don't
-> skip to the next until the check passes.
+> **Audience:** AI agents and operators setting up Hermes Workspace.
+> Run these steps in order. Each step has a verification command.
 
 ## Architecture (30-second version)
 
-```
+```text
 ┌─────────────────┐       HTTP :8642        ┌──────────────────┐
-│  Claude Gateway  │◄──────────────────────►│ Hermes Workspace │
-│  (Python, FastAPI)│  /health, /v1/chat,   │  (Node, Vite)     │
-│  hermes gateway   │  /api/sessions, etc.  │  pnpm dev         │
-│  run              │                       │  port 3000        │
+│ Hermes Gateway  │◄──────────────────────►│ Hermes Workspace │
+│ (Python, FastAPI)│ /health, /v1/chat,    │ (Node, Vite)     │
+│ hermes gateway   │ /api/sessions, etc.   │ port 3000        │
+│ run              │                       │                  │
 └─────────────────┘                        └──────────────────┘
 ```
 
-Workspace talks to the gateway over HTTP. No WebSocket. No magic.
+Workspace talks to the gateway over HTTP.
 If `curl http://127.0.0.1:8642/health` returns JSON, they can pair.
+
+## Compatibility note
+
+This repo still contains some Claude-era names in code, env aliases, and log labels.
+For setup, treat **`hermes` as canonical**.
+If a host also has a `claude` binary, that is a legacy alias, not the preferred instruction path.
 
 ---
 
-## Step 1 — Is hermes-agent installed?
+## Step 1 — Is Hermes Agent installed and on PATH?
 
 ```bash
-claude --version
+hermes --version
 ```
 
 **Pass:** prints `Hermes Agent vX.Y.Z`.
 **Fail:** `command not found`.
 
-### Fix (if hermes-agent not installed)
+### Fix
 
 ```bash
-# Official Nous installer — works on macOS, Linux, WSL
 curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash
+export PATH="$HOME/.local/bin:$PATH"
+hermes --version
 ```
 
-After install, restart your shell or run:
-```bash
-export PATH="$HOME/.local/bin:$PATH"
-claude --version
+### Important for systemd/WSL installs
+
+If Workspace is started by systemd or another supervisor, make sure that runtime PATH also includes `~/.local/bin`.
+Otherwise worker dispatches may fail even though `hermes` works in your interactive shell.
+
+Recommended service PATH fragment:
+
+```text
+PATH=$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin
 ```
 
 ---
 
 ## Step 2 — Is the API server enabled?
 
-The gateway exposes an HTTP API on port 8642, but only if `API_SERVER_ENABLED=true`
-is set in the claude env file.
+The gateway exposes an HTTP API on port 8642 only when `API_SERVER_ENABLED=true`
+is set in the Hermes env file.
 
 ```bash
-# Find the env file
-CLAUDE_ENV="$(claude config env-path 2>/dev/null || echo "$HOME/.claude/.env")"
-echo "Claude env file: $CLAUDE_ENV"
-
-# Check for the key
-grep -i "API_SERVER" "$CLAUDE_ENV" 2>/dev/null || echo "NO API_SERVER KEYS FOUND"
+HERMES_ENV="$(hermes config env-path 2>/dev/null || echo "$HOME/.hermes/.env")"
+echo "Hermes env file: $HERMES_ENV"
+grep -i "API_SERVER" "$HERMES_ENV" 2>/dev/null || echo "NO API_SERVER KEYS FOUND"
 ```
 
-**Pass:** output includes `API_SERVER_ENABLED=true` (with underscores).
+**Pass:** output includes `API_SERVER_ENABLED=true`.
 
-**Common failure — wrong env var names:**
-```
-# ❌ WRONG (missing underscores — gateway silently ignores these)
+### Common failure — wrong env var names
+
+```text
+# ❌ wrong
 APISERVERENABLED=true
 APISERVERHOST=0.0.0.0
 
-# ✅ CORRECT
+# ✅ correct
 API_SERVER_ENABLED=true
 API_SERVER_HOST=127.0.0.1
 ```
 
-> **Critical:** env var names MUST have underscores. `APISERVERENABLED` ≠
-> `API_SERVER_ENABLED`. The gateway reads exact names via `os.getenv()`.
-> Typos are silently ignored — no warning, no error, just no API server.
-
 ### Fix
 
 ```bash
-CLAUDE_ENV="$(claude config env-path 2>/dev/null || echo "$HOME/.claude/.env")"
-mkdir -p "$(dirname "$CLAUDE_ENV")"
+HERMES_ENV="$(hermes config env-path 2>/dev/null || echo "$HOME/.hermes/.env")"
+mkdir -p "$(dirname "$HERMES_ENV")"
 
-# Remove any typo'd versions first
-sed -i.bak '/^APISERVERENABLED/d; /^APISERVERHOST/d; /^APISERVERKEY/d; /^APISERVERPORT/d' "$CLAUDE_ENV" 2>/dev/null || true
+sed -i.bak '/^APISERVERENABLED/d; /^APISERVERHOST/d; /^APISERVERKEY/d; /^APISERVERPORT/d' "$HERMES_ENV" 2>/dev/null || true
 
-# Write correct keys (idempotent — updates existing or appends)
-grep -q '^API_SERVER_ENABLED=' "$CLAUDE_ENV" 2>/dev/null && \
-  sed -i.bak 's/^API_SERVER_ENABLED=.*/API_SERVER_ENABLED=true/' "$CLAUDE_ENV" || \
-  echo 'API_SERVER_ENABLED=true' >> "$CLAUDE_ENV"
+grep -q '^API_SERVER_ENABLED=' "$HERMES_ENV" 2>/dev/null && \
+  sed -i.bak 's/^API_SERVER_ENABLED=.*/API_SERVER_ENABLED=true/' "$HERMES_ENV" || \
+  echo 'API_SERVER_ENABLED=true' >> "$HERMES_ENV"
 ```
 
-**Do NOT set `API_SERVER_HOST=0.0.0.0`** unless the user explicitly wants
-network access AND sets `API_SERVER_KEY=<some-secret>`. The gateway refuses
-to bind non-loopback without a key (silent failure). Default `127.0.0.1` is
-correct for local Workspace.
+**Do not set `API_SERVER_HOST=0.0.0.0`** unless the user explicitly wants network exposure and also sets `API_SERVER_KEY=<secret>`.
 
 ---
 
 ## Step 3 — Is the gateway process running?
 
 ```bash
-pgrep -af "claude.*gateway" || echo "NOT RUNNING"
+hermes gateway status
 ```
 
-**Pass:** shows a `hermes gateway run` (or similar) process.
-**Fail:** nothing.
+**Pass:** shows the gateway as running.
 
 ### Fix
 
 ```bash
-# Start in foreground (recommended for debugging — you see all output)
+# Foreground/manual
 hermes gateway run
 
-# OR if using systemd
-hermes gateway install   # creates the service
-systemctl --user start claude-gateway
+# If the gateway was installed as a user service
+systemctl --user restart hermes-gateway.service
 ```
-
-**First run:** claude may prompt for initial setup (provider, model). Complete
-the interactive setup before continuing.
 
 ---
 
-## Step 4 — Is port 8642 bound?
+## Step 4 — Is port 8642 bound and healthy?
 
 ```bash
-# Linux / WSL
 ss -tlnp | grep 8642 || echo "PORT NOT BOUND"
-
-# macOS
-lsof -iTCP:8642 -sTCP:LISTEN || echo "PORT NOT BOUND"
-
-# Universal fallback
 curl -sf http://127.0.0.1:8642/health && echo "OK" || echo "NOT REACHABLE"
 ```
 
-**Pass:** port is bound AND `curl /health` returns `{"status": "ok", "platform": "hermes-agent"}`.
+**Pass:** port is bound and `/health` returns JSON.
 
-**Fail — gateway running but port not bound:** API server didn't start.
-Go back to Step 2 and verify the env vars have underscores.
+**Fail — gateway running but port not bound:** go back to Step 2.
 
-**Fail — port bound by something else:**
-```bash
-# Find what's on the port
-lsof -i :8642   # macOS
-ss -tlnp | grep 8642   # Linux
-# Kill the stale process, then restart gateway
-```
+**Fail — port bound by something else:** identify the other process, stop it, then restart the gateway.
 
 ---
 
 ## Step 5 — Is Workspace pointed at the gateway?
 
 ```bash
-# In the hermes-workspace directory
-cat .env | grep HERMES_API_URL
+grep HERMES_API_URL ~/hermes-workspace/.env
 ```
 
 **Pass:** `HERMES_API_URL=http://127.0.0.1:8642`
 
-**Fail or missing:**
+### Fix
+
 ```bash
-# In the hermes-workspace directory
-echo 'HERMES_API_URL=http://127.0.0.1:8642' >> .env
+grep -q '^HERMES_API_URL=' ~/hermes-workspace/.env 2>/dev/null && \
+  sed -i.bak 's|^HERMES_API_URL=.*|HERMES_API_URL=http://127.0.0.1:8642|' ~/hermes-workspace/.env || \
+  echo 'HERMES_API_URL=http://127.0.0.1:8642' >> ~/hermes-workspace/.env
 ```
 
-If `.env` doesn't exist:
-```bash
-cp .env.example .env
-# Then set HERMES_API_URL as above
-```
+If the gateway uses `API_SERVER_KEY`, set the same value in Workspace as `HERMES_API_TOKEN`.
 
 ---
 
-## Step 6 — Start Workspace and verify pairing
+## Step 6 — Swarm/Kanban host prerequisites
+
+These are **not optional** if you expect the full Workspace flow to work.
+
+### Persistent Swarm workers need `tmux`
 
 ```bash
-cd ~/hermes-workspace   # or wherever it's installed
+tmux -V
+```
+
+Without tmux, Workspace can still render, but persistent worker sessions and attachable runtime lanes will not behave as designed.
+
+### Hermes Kanban needs `sqlite3`
+
+```bash
+sqlite3 --version
+```
+
+Workspace reads the canonical board from `~/.hermes/kanban.db` via the local `sqlite3` binary.
+If `sqlite3` is missing, `/api/swarm-kanban` can return 500 even when the database file exists.
+
+---
+
+## Step 7 — Start Workspace and verify pairing
+
+```bash
+cd ~/hermes-workspace
 pnpm dev
 ```
 
-**Look for this in the startup output:**
-```
+Look for lines like:
+
+```text
 [claude-api] Configured API: http://127.0.0.1:8642
-[gateway] gateway=http://127.0.0.1:8642 ... mode=enhanced-fork core=[health, chatCompletions, models, streaming]
+[gateway] gateway=http://127.0.0.1:8642 ...
 ```
 
-**`mode=enhanced-fork`** = paired successfully. Sessions, memory, skills all
-available.
-
-**`mode=disconnected`** = pairing failed. Go back to Step 4.
+The log label may still say `[claude-api]` on some builds. Treat that as a legacy label.
 
 ---
 
-## Step 7 — Verify in browser
+## Step 8 — Verify in browser
 
-Open `http://localhost:3000` (or whatever port Vite reports).
+Open `http://localhost:3000`.
 
-- **Full UI with chat** = success.
-- **"Connect Backend" / "Skip setup" onboarding screen** = gateway not reachable
-  from the Vite SSR server. Re-check Steps 4–5.
-- **500 error / blank page** = Vite build issue, not a pairing problem.
-  Check terminal for build errors.
+- **Full UI with chat** = Workspace paired successfully.
+- **Connect Backend / Skip setup** = gateway not reachable from Workspace.
+- **Kanban 500** = usually missing `sqlite3`.
+- **Swarm runtime exists but workers will not start** = usually missing `tmux`, missing PATH to `hermes`, or missing worker wrapper/profile setup.
 
 ---
 
-## Quick-fix cheat sheet (copy-paste block)
+## Important truth about Swarm autopilot
 
-For users who just want it to work — run this entire block:
+Swarm has orchestrator APIs and runtime state, but **the loop is not inherently self-scheduling on every install**.
+
+What is true today:
+- dispatch works
+- runtime/report surfaces work
+- persistent workers can work when tmux + profiles + wrappers are present
+- `/api/swarm-orchestrator-loop` exists
+
+What is **not** guaranteed by default:
+- a background scheduler that keeps calling the orchestrator loop forever
+- automatic wrapper creation for every worker
+- a fully autonomous Kanban-to-dispatch engine with zero local setup
+
+If you want a real autopilot lane, add that consciously as local ops wiring rather than assuming the board drives itself.
+
+---
+
+## Diagnostic bundle
 
 ```bash
-# 1. Find claude env
-CLAUDE_ENV="$(claude config env-path 2>/dev/null || echo "$HOME/.claude/.env")"
-mkdir -p "$(dirname "$CLAUDE_ENV")"
-
-# 2. Enable API server (idempotent)
-grep -q '^API_SERVER_ENABLED=' "$CLAUDE_ENV" 2>/dev/null && \
-  sed -i.bak 's/^API_SERVER_ENABLED=.*/API_SERVER_ENABLED=true/' "$CLAUDE_ENV" || \
-  echo 'API_SERVER_ENABLED=true' >> "$CLAUDE_ENV"
-
-# 3. Clean up common typos
-sed -i.bak '/^APISERVERENABLED/d; /^APISERVERHOST/d' "$CLAUDE_ENV" 2>/dev/null || true
-
-# 4. Restart gateway
-hermes gateway stop 2>/dev/null; sleep 2; hermes gateway run &
-sleep 8
-
-# 5. Verify
-curl -sf http://127.0.0.1:8642/health && echo "✅ Gateway API is up" || echo "❌ Gateway API not reachable"
-
-# 6. Set workspace env
-cd ~/hermes-workspace 2>/dev/null || cd "$(find ~ -maxdepth 2 -name hermes-workspace -type d | head -1)"
-grep -q '^HERMES_API_URL=' .env 2>/dev/null && \
-  sed -i.bak 's|^HERMES_API_URL=.*|HERMES_API_URL=http://127.0.0.1:8642|' .env || \
-  echo 'HERMES_API_URL=http://127.0.0.1:8642' >> .env
-
-echo "✅ Done. Run: pnpm dev"
-```
-
----
-
-## Platform-specific notes
-
-### WSL (Windows Subsystem for Linux)
-
-- Python cold-start is slower on WSL due to filesystem I/O overhead.
-  The gateway may take 10–15 seconds to bind port 8642.
-- If Workspace's health check times out before the gateway is ready,
-  start the gateway separately first (`hermes gateway run`), wait for
-  the port to bind, then start Workspace in a second terminal.
-- Use `127.0.0.1`, not `localhost` — WSL2 sometimes resolves `localhost`
-  to the Windows host instead of the WSL VM.
-
-### macOS
-
-- No special considerations. Default setup works.
-- If using Homebrew Python, ensure `claude` is on PATH:
-  `export PATH="$HOME/.local/bin:$PATH"`
-
-### Linux (native)
-
-- systemd users: `hermes gateway install` creates a user service.
-  Check status with `systemctl --user status claude-gateway`.
-- If using a different `$HOME` for the systemd service (e.g. running as
-  a different user), the `.env` file location changes. Use
-  `claude config env-path` to find it.
-
----
-
-## Still broken?
-
-Collect this diagnostic bundle and share it:
-
-```bash
-echo "=== claude version ===" && claude --version 2>&1
-echo "=== claude env path ===" && claude config env-path 2>&1
-echo "=== claude env (redacted) ===" && grep -E "^(API_SERVER|CLAUDE_)" "$(claude config env-path 2>/dev/null || echo ~/.hermes/.env)" 2>&1
-echo "=== gateway process ===" && pgrep -af "claude.*gateway" 2>&1 || echo "not running"
+echo "=== hermes version ===" && hermes --version 2>&1
+echo "=== hermes env path ===" && hermes config env-path 2>&1
+echo "=== API server env ===" && grep -E '^(API_SERVER|HERMES_)' "$(hermes config env-path 2>/dev/null || echo ~/.hermes/.env)" 2>&1
+echo "=== gateway status ===" && hermes gateway status 2>&1
 echo "=== port 8642 ===" && (ss -tlnp 2>/dev/null || lsof -iTCP:8642 -sTCP:LISTEN 2>/dev/null) | grep 8642 || echo "not bound"
 echo "=== health check ===" && curl -sf http://127.0.0.1:8642/health 2>&1 || echo "not reachable"
-echo "=== workspace .env ===" && grep CLAUDE ~/hermes-workspace/.env 2>&1 || echo "no .env"
+echo "=== workspace .env ===" && grep HERMES_API_URL ~/hermes-workspace/.env 2>&1 || echo "no .env"
+echo "=== tmux ===" && tmux -V 2>&1
+echo "=== sqlite3 ===" && sqlite3 --version 2>&1
 echo "=== OS ===" && uname -a
 echo "=== Node ===" && node --version
 echo "=== Python ===" && python3 --version 2>&1
 ```
-
-This gives any human or agent enough context to diagnose the issue in one read.
