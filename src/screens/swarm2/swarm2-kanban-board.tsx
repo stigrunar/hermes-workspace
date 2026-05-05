@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { fetchAssignees, type TaskAssignee } from '@/lib/tasks-api'
 import { cn } from '@/lib/utils'
 
 type KanbanLane = 'backlog' | 'ready' | 'running' | 'review' | 'blocked' | 'done'
@@ -56,6 +57,12 @@ type KanbanBackendPresentation = {
   toastTitle: string
   toastBody: string
   title: string | undefined
+}
+
+type KanbanAssigneeOption = {
+  id: string
+  label: string
+  isHuman: boolean
 }
 
 export function getKanbanBackendPresentation(backend: KanbanBackendMeta | null | undefined): KanbanBackendPresentation {
@@ -153,10 +160,51 @@ function splitCriteria(value: string): string[] {
     .filter(Boolean)
 }
 
-function workerLabel(workers: Array<KanbanWorker>, workerId: string | null): string {
+export function deriveKanbanAssigneeOptions({
+  workers,
+  cards,
+  assignees,
+}: {
+  workers: Array<KanbanWorker>
+  cards: Array<SwarmKanbanCard>
+  assignees: Array<TaskAssignee>
+}): Array<KanbanAssigneeOption> {
+  const merged = new Map<string, KanbanAssigneeOption>()
+
+  const remember = (id: string | null | undefined, partial?: Partial<KanbanAssigneeOption>) => {
+    const normalizedId = id?.trim()
+    if (!normalizedId) return
+    const existing = merged.get(normalizedId)
+    merged.set(normalizedId, {
+      id: normalizedId,
+      label: partial?.label?.trim() || existing?.label || normalizedId,
+      isHuman: partial?.isHuman ?? existing?.isHuman ?? false,
+    })
+  }
+
+  for (const assignee of assignees) {
+    remember(assignee.id, { label: assignee.label, isHuman: assignee.isHuman })
+  }
+
+  for (const worker of workers) {
+    remember(worker.id, { label: worker.displayName || worker.id, isHuman: false })
+  }
+
+  for (const card of cards) {
+    remember(card.assignedWorker)
+    remember(card.reviewer)
+  }
+
+  return Array.from(merged.values()).sort((a, b) => {
+    if (a.isHuman !== b.isHuman) return a.isHuman ? 1 : -1
+    return a.label.localeCompare(b.label)
+  })
+}
+
+function workerLabel(options: Array<KanbanAssigneeOption>, workerId: string | null): string {
   if (!workerId) return 'Unassigned'
-  const worker = workers.find((item) => item.id === workerId)
-  return worker?.displayName || workerId
+  const worker = options.find((item) => item.id === workerId)
+  return worker?.label || workerId
 }
 
 export function Swarm2KanbanBoard({
@@ -185,9 +233,23 @@ export function Swarm2KanbanBoard({
     refetchInterval: 30_000,
     staleTime: 10_000,
   })
+  const assigneesQuery = useQuery({
+    queryKey: ['swarm2', 'kanban-assignees'],
+    queryFn: fetchAssignees,
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+  })
 
   const backend = query.data?.backend ?? null
   const backendPresentation = useMemo(() => getKanbanBackendPresentation(backend), [backend])
+  const assigneeOptions = useMemo(
+    () => deriveKanbanAssigneeOptions({
+      workers,
+      cards: query.data?.cards ?? [],
+      assignees: assigneesQuery.data?.assignees ?? [],
+    }),
+    [workers, query.data?.cards, assigneesQuery.data?.assignees],
+  )
 
   useEffect(() => {
     if (!backend) return
@@ -341,14 +403,14 @@ export function Swarm2KanbanBoard({
                 <span className="mb-1 block font-semibold text-[var(--theme-muted)]">Assigned worker</span>
                 <select value={draftWorker} onChange={(event) => setDraftWorker(event.target.value)} className="w-full rounded-xl border border-[var(--theme-border)] bg-[var(--theme-bg)] px-3 py-2 text-sm text-[var(--theme-text)] outline-none">
                   <option value="">Unassigned</option>
-                  {workers.map((worker) => <option key={worker.id} value={worker.id}>{worker.displayName || worker.id}</option>)}
+                  {assigneeOptions.filter((option) => !option.isHuman).map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
                 </select>
               </label>
               <label className="block text-xs">
                 <span className="mb-1 block font-semibold text-[var(--theme-muted)]">Reviewer</span>
                 <select value={draftReviewer} onChange={(event) => setDraftReviewer(event.target.value)} className="w-full rounded-xl border border-[var(--theme-border)] bg-[var(--theme-bg)] px-3 py-2 text-sm text-[var(--theme-text)] outline-none">
                   <option value="">Unassigned</option>
-                  {workers.map((worker) => <option key={worker.id} value={worker.id}>{worker.displayName || worker.id}</option>)}
+                  {assigneeOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
                 </select>
               </label>
               <label className="block text-xs">
@@ -409,8 +471,8 @@ export function Swarm2KanbanBoard({
                       </ul>
                     ) : null}
                     <div className="mt-3 space-y-1 text-[10px] text-[var(--theme-muted)]">
-                      <div>Owner: <span className="font-semibold text-[var(--theme-text)]">{workerLabel(workers, card.assignedWorker)}</span></div>
-                      <div>Reviewer: <span className="font-semibold text-[var(--theme-text)]">{workerLabel(workers, card.reviewer)}</span></div>
+                      <div>Owner: <span className="font-semibold text-[var(--theme-text)]">{workerLabel(assigneeOptions, card.assignedWorker)}</span></div>
+                      <div>Reviewer: <span className="font-semibold text-[var(--theme-text)]">{workerLabel(assigneeOptions, card.reviewer)}</span></div>
                       {card.missionId ? <div className="truncate" title={card.missionId}>Mission: {card.missionId}</div> : null}
                       {card.reportPath ? <div className="truncate" title={card.reportPath}>Report: {card.reportPath}</div> : null}
                     </div>
