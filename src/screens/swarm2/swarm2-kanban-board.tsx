@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
+import { MATRIX_BOARD_LABEL, MATRIX_DEFAULT_BOARD_SLUG } from '@/lib/matrix-branding'
 
 type KanbanLane = 'backlog' | 'ready' | 'running' | 'review' | 'blocked' | 'done'
 
@@ -10,7 +11,7 @@ type SwarmKanbanCard = {
   id: string
   title: string
   spec: string
-  acceptanceCriteria: string[]
+  acceptanceCriteria: Array<string>
   assignedWorker: string | null
   reviewer: string | null
   status: KanbanLane
@@ -138,7 +139,7 @@ async function fetchKanbanCards(): Promise<{ cards: Array<SwarmKanbanCard>; back
 async function createKanbanCard(input: {
   title: string
   spec: string
-  acceptanceCriteria: string[]
+  acceptanceCriteria: Array<string>
   assignedWorker: string | null
   reviewer: string | null
   status: KanbanLane
@@ -165,7 +166,7 @@ async function updateKanbanCard(id: string, updates: Partial<SwarmKanbanCard>): 
   return data.card
 }
 
-function splitCriteria(value: string): string[] {
+function splitCriteria(value: string): Array<string> {
   return value
     .split('\n')
     .map((line) => line.replace(/^[-*]\s*/, '').trim())
@@ -279,9 +280,9 @@ export function Swarm2KanbanBoard({
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--theme-muted)]">Manual planning</div>
-          <h2 className="mt-1 text-lg font-semibold text-[var(--theme-text)]">Swarm Board</h2>
+          <h2 className="mt-1 text-lg font-semibold text-[var(--theme-text)]">{MATRIX_BOARD_LABEL}</h2>
           <p className="mt-1 max-w-3xl text-xs leading-relaxed text-[var(--theme-muted-2)]">
-            Auto-detects the shared Kanban store by default; if it is unavailable, cards stay in a local fallback. Dispatch stays explicit through Router.
+            Auto-detects the shared Kanban store by default. The current downstream board target remains <code>{MATRIX_DEFAULT_BOARD_SLUG}</code> for compatibility; if shared Kanban is unavailable, cards stay in a local fallback. Dispatch stays explicit through Router.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--theme-muted)]">

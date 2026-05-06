@@ -30,6 +30,8 @@ Role-based dispatch routes builders, reviewers, docs, research, ops, triage, QA,
 A byte-verified review gate protects release branches before PRs ship.
 Autonomous PR/issue lanes, lab experiments, and the repair playbook keep the machine moving while humans handle judgment.
 
+Downstream note: the Stig/Matrix branch brands the Swarm control surface as The Matrix while keeping stable worker ids (for example `swarm2`) and the current compatibility board slug (`mission-control`) intact under the hood.
+
 Start here: [docs/swarm/](./docs/swarm/)
 
 - **Orchestrator Chat** — ask the control plane for one task, a decomposed mission, or a full broadcast.

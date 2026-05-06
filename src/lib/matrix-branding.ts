@@ -1,0 +1,4 @@
+export const MATRIX_DISPLAY_NAME = 'The Matrix'
+export const MATRIX_SWARM_SURFACE_LABEL = 'The Matrix'
+export const MATRIX_BOARD_LABEL = 'Matrix Board'
+export const MATRIX_DEFAULT_BOARD_SLUG = 'mission-control'

@@ -1,17 +1,22 @@
-import { createFileRoute } from '@tanstack/react-router'
-import { json } from '@tanstack/react-start'
-import { isAuthenticated } from '../../server/auth-middleware'
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
+import { createFileRoute } from '@tanstack/react-router'
+import { json } from '@tanstack/react-start'
 import * as yaml from 'yaml'
+import { isAuthenticated } from '../../server/auth-middleware'
 import { BEARER_TOKEN, CLAUDE_API, ensureGatewayProbed } from '../../server/gateway-capabilities'
 import { getClaudeRoot, getProfileClaudeHome, getWorkspaceClaudeHome } from '../../server/claude-paths'
+import { readSwarmRoster } from '../../server/swarm-roster'
 
 type CrewDefinition = {
   id: string
   displayName: string
   role: string
+  specialty?: string
+  mission?: string
+  skills?: Array<string>
+  capabilities?: Array<string>
   profilePath: string | null
 }
 
@@ -33,8 +38,11 @@ function titleCase(value: string): string {
     .join(' ')
 }
 
-function buildCrewDefinitions(): CrewDefinition[] {
+function buildCrewDefinitions(): Array<CrewDefinition> {
   const profilesDir = join(getClaudeRoot(), 'profiles')
+  const rosterById = new Map(
+    readSwarmRoster().workers.map((worker) => [worker.id, worker]),
+  )
   const dynamicProfiles = existsSync(profilesDir)
     ? readdirSync(profilesDir, { withFileTypes: true })
         .filter((entry) => {
@@ -53,12 +61,21 @@ function buildCrewDefinitions(): CrewDefinition[] {
 
   return [
     { id: 'workspace', displayName: 'Workspace', role: 'Primary profile', profilePath: null },
-    ...dynamicProfiles.map((profile) => ({
-      id: profile,
-      displayName: titleCase(profile),
-      role: 'Profile',
-      profilePath: profile,
-    })),
+    ...dynamicProfiles.map((profile) => {
+      const rosterWorker = rosterById.get(profile)
+      return {
+        id: profile,
+        displayName: rosterWorker?.name.trim() || titleCase(profile),
+        role: rosterWorker?.role.trim() || 'Profile',
+        specialty: rosterWorker?.specialty.trim() || undefined,
+        mission: rosterWorker?.mission.trim() || undefined,
+        skills: rosterWorker?.skills.length ? rosterWorker.skills : undefined,
+        capabilities: rosterWorker?.capabilities.length
+          ? rosterWorker.capabilities
+          : undefined,
+        profilePath: profile,
+      }
+    }),
   ]
 }
 
@@ -247,6 +264,10 @@ export const Route = createFileRoute('/api/crew-status')({
               id: member.id,
               displayName: member.displayName,
               role: member.role,
+              specialty: member.specialty,
+              mission: member.mission,
+              skills: member.skills,
+              capabilities: member.capabilities,
               profileFound: false,
               gatewayState: 'unknown',
               processAlive: false,
@@ -273,6 +294,10 @@ export const Route = createFileRoute('/api/crew-status')({
             id: member.id,
             displayName: member.displayName,
             role: member.role,
+            specialty: member.specialty,
+            mission: member.mission,
+            skills: member.skills,
+            capabilities: member.capabilities,
             profileFound: true,
             gatewayState: gatewayInfo.gatewayState,
             processAlive: checkProcessAlive(gatewayInfo.pid),
