@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
 
+import { MATRIX_DISPLAY_NAME } from '@/lib/matrix-branding'
+
 export function LoginScreen() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -61,7 +63,7 @@ export function LoginScreen() {
                 <circle cx="50" cy="50" r="15" fill="currentColor" />
               </svg>
               <h1 className="text-2xl font-bold tracking-tight text-primary-900">
-                Hermes Workspace
+                {MATRIX_DISPLAY_NAME}
               </h1>
             </div>
           </div>
