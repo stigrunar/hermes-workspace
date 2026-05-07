@@ -22,7 +22,7 @@ describe('Swarm2 Kanban backend presentation', () => {
       badgeLabel: 'Shared board',
       badgeTone: 'claude',
       toastTitle: 'Board connected',
-      toastBody: 'Cards and status changes are using the canonical Kanban store.',
+      toastBody: 'Board data is coming from the canonical Hermes SQLite store.',
       title: 'Canonical storage detected',
     })
   })
