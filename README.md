@@ -159,6 +159,37 @@ echo 'API_SERVER_HOST=0.0.0.0' >> ~/.hermes/.env
 
 Then restart the gateway, dashboard, and workspace. Hit the workspace from the remote device and the connection probe will use the Tailscale IP instead of localhost. Both `HERMES_API_URL` and `HERMES_DASHBOARD_URL` must be set to Tailscale/LAN-reachable URLs — setting only one will leave the other probing `127.0.0.1` and failing.
 
+#### Matrix budget cockpit (advisory first slice)
+
+The Matrix / Swarm cockpit now exposes a visible budget + usage rail in the orchestrator hub. It combines:
+
+- current session context usage from `/api/context-usage`
+- provider auth / usage health from `/api/provider-usage`
+- estimated 30-day cost from `/api/dashboard/overview`
+- your local `preferredBudgetModel` + `usageThreshold` workspace settings
+- optional env-backed Matrix thresholds
+
+Add these optional vars to `.env` when you want cockpit thresholds/colors:
+
+```bash
+# Label shown in the Matrix budget card
+VITE_MATRIX_BUDGET_SCOPE_LABEL="This Matrix cockpit"
+
+# Advisory spend thresholds (USD, 30d dashboard estimate)
+VITE_MATRIX_BUDGET_WARNING_USD=15
+VITE_MATRIX_BUDGET_LIMIT_USD=25
+
+# Advisory context cap percent for the Matrix card
+VITE_MATRIX_CONTEXT_LIMIT_PERCENT=90
+```
+
+Notes:
+
+- This slice is advisory only — it does not block routing or dispatch yet.
+- The cockpit shows `/api/swarm-dispatch` as the exact next enforcement hook for a future hard-limit slice.
+- If the dashboard cannot compute a precise dollar figure, the card labels the estimate as `partial`, `included`, or `unknown` instead of pretending the number is exact.
+- Provider rows explicitly flag missing or expired auth so operator budget issues are visible from the Matrix surface, not only from Settings.
+
 **If you've already started the workspace**, you can update both URLs from `Settings → Connection` without restarting. The values are persisted to `~/.hermes/workspace-overrides.json` and take effect immediately (gateway capabilities are reprobed on save). Editing `.env` still works for pre-start config and for CI/containers.
 
 ---

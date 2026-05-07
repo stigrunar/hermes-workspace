@@ -9,14 +9,16 @@ import {
   Settings01Icon,
   ViewIcon,
 } from '@hugeicons/core-free-icons'
+import { MatrixBudgetCockpit } from './matrix-budget-cockpit'
+import type { DispatchResponse } from '@/components/swarm/router-chat'
+import type { CrewMember } from '@/hooks/use-crew-status'
+import type { AgentWorkingRow } from '@/screens/gateway/components/agents-working-panel'
 import { AgentProgress } from '@/components/agent-view/agent-progress'
 import { PixelAvatar } from '@/components/agent-swarm/pixel-avatar'
+import { RouterChat } from '@/components/swarm/router-chat'
 import { Button } from '@/components/ui/button'
-import { RouterChat, type DispatchResponse } from '@/components/swarm/router-chat'
-import { OfficeView } from '@/screens/gateway/components/office-view'
-import type { AgentWorkingRow } from '@/screens/gateway/components/agents-working-panel'
-import type { CrewMember } from '@/hooks/use-crew-status'
 import { cn } from '@/lib/utils'
+import { OfficeView } from '@/screens/gateway/components/office-view'
 
 const ORCHESTRATOR_NAME_KEY = 'swarm2:orchestrator:name'
 const DEFAULT_NAME = 'Main Agent'
@@ -134,7 +136,7 @@ export function Swarm2OrchestratorCard({
 
   const agentPageCount = Math.max(1, Math.ceil(filteredAgents.length / AGENT_PAGE_SIZE))
   const visibleAgents = filteredAgents.slice(agentPage * AGENT_PAGE_SIZE, agentPage * AGENT_PAGE_SIZE + AGENT_PAGE_SIZE)
-  const officeAgents = useMemo<AgentWorkingRow[]>(() => activeAgents.map((agent) => ({
+  const officeAgents = useMemo<Array<AgentWorkingRow>>(() => activeAgents.map((agent) => ({
     id: agent.workerId,
     name: agent.workerName,
     modelId: agent.role,
@@ -258,6 +260,13 @@ export function Swarm2OrchestratorCard({
             {/* Reviewer gate text removed — reviewer routing should be derived from roster/config, not pinned in hero chrome. */}
           </div>
         </div>
+
+        <MatrixBudgetCockpit
+          roomCount={roomCount}
+          authErrors={authErrors}
+          selectedLabel={selectedLabel}
+          workspaceModel={workspaceModel}
+        />
 
         <div className="mt-6 min-h-[12.5rem] flex-1">
           <RouterChat
