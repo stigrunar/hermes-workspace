@@ -1,6 +1,6 @@
 {
-  "name": "Hermes Workspace",
-  "short_name": "Hermes",
+  "name": "The Matrix — Hermes Workspace",
+  "short_name": "Matrix",
   "description": "Native web control surface for Hermes Agent",
   "start_url": "/",
   "display": "standalone",

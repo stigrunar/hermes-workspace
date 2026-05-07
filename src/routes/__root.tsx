@@ -28,6 +28,10 @@ import {
 import { ErrorBoundary } from '@/components/error-boundary'
 import { LoginScreen } from '@/components/auth/login-screen'
 import { fetchClaudeAuthStatus, type AuthStatus } from '@/lib/claude-auth'
+import {
+  MATRIX_DISPLAY_NAME,
+  MATRIX_DOCUMENT_TITLE,
+} from '@/lib/matrix-branding'
 import { getRootSurfaceState } from './-root-layout-state'
 
 const APP_CSP = [
@@ -126,12 +130,24 @@ export const Route = createRootRoute({
           'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-visual',
       },
       {
-        title: 'Hermes Workspace',
+        title: MATRIX_DOCUMENT_TITLE,
       },
       {
         name: 'description',
         content:
           'Hermes Agent workspace for chat, tools, files, memory, and jobs.',
+      },
+      {
+        name: 'application-name',
+        content: MATRIX_DISPLAY_NAME,
+      },
+      {
+        name: 'apple-mobile-web-app-title',
+        content: MATRIX_DISPLAY_NAME,
+      },
+      {
+        property: 'og:title',
+        content: MATRIX_DOCUMENT_TITLE,
       },
       {
         property: 'og:image',
@@ -144,6 +160,10 @@ export const Route = createRootRoute({
       {
         name: 'twitter:card',
         content: 'summary_large_image',
+      },
+      {
+        name: 'twitter:title',
+        content: MATRIX_DOCUMENT_TITLE,
       },
       {
         name: 'twitter:image',
