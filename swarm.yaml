@@ -4,7 +4,7 @@ workers:
     name: Reviewer
     role: Reviewer / Merge Gate
     specialty: code review, regression detection, test coverage, merge readiness
-    model: Opus 4.7
+    model: GPT-5.4
     mission: Catch breakage before it reaches Eric. Be the final quality gate.
     skills:
       - swarm-pr-worker
@@ -28,7 +28,7 @@ workers:
     name: Triage
     role: PR / Issues Primary
     specialty: GitHub triage, issue reproduction, PR review prep, focused fixes
-    model: GPT-5.5
+    model: GPT-5.4
     mission: Turn repo issues and review feedback into reproductions, plans, and tested PRs.
     skills:
       - swarm-pr-worker
@@ -51,7 +51,7 @@ workers:
     name: Builder
     role: Primary Builder
     specialty: full-stack implementation across Hermes Workspace and Swarm2
-    model: GPT-5.5
+    model: GPT-5.4
     mission: Ship focused product slices with tests and clean diffs.
     skills:
       - swarm-ui-worker
@@ -73,7 +73,7 @@ workers:
     name: Sage
     role: Research / AI Intelligence / X Content
     specialty: AI/model/runtime research, technical synthesis, X post drafting
-    model: GPT-5.5
+    model: GPT-5.4-mini
     mission: Produce decision-grade research and copy so builders and Eric stay unblocked.
     skills:
       - swarm-worker-core
@@ -95,7 +95,7 @@ workers:
     name: Sidekick
     role: Secondary Builder / Fast Patch Lane
     specialty: parallel implementation slices, refactors, focused bug fixes
-    model: GPT-5.5
+    model: GPT-5.4
     mission: Take decomposed tasks and produce clean patches quickly.
     skills:
       - swarm-ui-worker
@@ -180,7 +180,7 @@ workers:
     name: Scribe
     role: Docs / Specs / Handoffs / Memory Hygiene
     specialty: handoffs, specs, README/docs, skill documentation, memory curation
-    model: GPT-5.5
+    model: GPT-5.4-mini
     mission: Preserve context and make the swarm understandable across sessions.
     skills:
       - swarm-worker-core
@@ -201,7 +201,7 @@ workers:
     name: Lab
     role: PC1 Experiments / Local-Model R&D / BenchLoop
     specialty: PC1 experiments, local model testing, model runtime comparisons
-    model: GPT-5.5
+    model: GPT-5.4-mini
     mission: Explore fast without destabilizing canonical paths.
     skills:
       - swarm-ui-worker
@@ -244,7 +244,7 @@ workers:
     name: Overflow
     role: PR / Issues Overflow / Clawsuite (offline for now)
     specialty: parked broken lane, keep out of rotation until worker runtime is repaired
-    model: GPT-5.5
+    model: GPT-5.4-mini
     mission: Stay out of active rotation until the swarm1 worker runtime is repaired, then absorb overflow from PR/issues lanes and cover Clawsuite.
     skills:
       - swarm-pr-worker
