@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import * as yaml from 'yaml'
 import { z } from 'zod'
 import { SWARM_CANONICAL_REPO } from './swarm-environment'
+import { fallbackOperatorDisplayName } from '../lib/operator-identity'
 
 export const SWARM_ROSTER_PATH = join(SWARM_CANONICAL_REPO, 'swarm.yaml')
 
@@ -65,17 +66,38 @@ function defaultRoleFromId(id: string): string {
   }
 }
 
+export function fallbackDisplayName(id: string): string {
+  return fallbackOperatorDisplayName(id)
+}
+
+export function fallbackRoleForWorker(id: string): string {
+  const normalized = id.toLowerCase()
+  const map: Record<string, string> = {
+    dolly: 'controller',
+    dollycode: 'implementation',
+    dollydesign: 'design',
+    dollyops: 'ops',
+    dollyprivate: 'private',
+  }
+  return map[normalized] || defaultRoleFromId(id)
+}
+
 export function fallbackRoster(ids: Array<string> = []): SwarmRoster {
   return {
     version: 1,
     workers: ids.map((id) => ({
       id,
-      name: id.replace(/^swarm/i, 'Swarm'),
-      role: defaultRoleFromId(id),
+      name: fallbackDisplayName(id),
+      role: fallbackRoleForWorker(id),
       specialty: '',
       model: 'Worker',
       mission: 'Awaiting orchestrator dispatch.',
       skills: [],
+      capabilities: [],
+      preferredTaskTypes: [],
+      maxConcurrentTasks: 1,
+      acceptsBroadcast: true,
+      reviewRequired: false,
     })),
   }
 }

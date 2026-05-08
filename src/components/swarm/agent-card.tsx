@@ -11,6 +11,10 @@ import type { CrewMember } from '@/hooks/use-crew-status'
 import { cn } from '@/lib/utils'
 import { getOnlineStatus } from '@/hooks/use-crew-status'
 import { SwarmNodeChat } from '@/components/swarm/swarm-node-chat'
+import {
+  formatSwarmIdentity,
+  formatSwarmRoleBadge,
+} from '@/components/swarm/swarm-identity'
 
 export type AgentState =
   | 'idle'
@@ -33,39 +37,6 @@ const STATE_TONE: Record<AgentState, string> = {
   syncing: 'border-blue-400/40 bg-blue-500/15 text-blue-200',
   reviewing: 'border-violet-400/40 bg-violet-500/15 text-violet-200',
   offline: 'border-red-500/30 bg-red-500/10 text-red-200',
-}
-
-function roleFromId(id: string): string {
-  const m = id.match(/(\d+)/)
-  const n = m ? m[1] : ''
-  switch (n) {
-    case '1':
-      return 'PR / Issues'
-    case '2':
-      return 'Qwen PC1'
-    case '3':
-      return 'BenchLoop'
-    case '4':
-      return 'Research'
-    case '5':
-      return 'Builder'
-    case '6':
-      return 'Reviewer'
-    case '7':
-      return 'Docs'
-    case '8':
-      return 'Ops'
-    case '9':
-      return 'Hackathon'
-    case '10':
-      return 'Builder'
-    case '11':
-      return 'Reviewer'
-    case '12':
-      return 'PR / Issues'
-    default:
-      return 'Worker'
-  }
 }
 
 function roleAccent(role: string): string {
@@ -149,7 +120,7 @@ export function AgentCard({
   compactSignalOnly = false,
 }: AgentCardProps) {
   const state = deriveAgentState(member, currentTask)
-  const role = roleFromId(member.id)
+  const role = formatSwarmRoleBadge(member.role)
   const status = getOnlineStatus(member)
   const isGenerating =
     state === 'executing' ||
@@ -195,7 +166,7 @@ export function AgentCard({
         <div className="min-w-0 flex-1">
           <div className="flex items-center justify-between gap-2">
             <div className="truncate text-base font-bold text-white">
-              {member.displayName || member.id}
+              {formatSwarmIdentity(member.displayName, member.id)}
             </div>
             <span className="shrink-0 rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.16em] text-white/75">
               {role}

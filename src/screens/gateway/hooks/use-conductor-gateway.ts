@@ -3,6 +3,7 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import type { Dispatch, SetStateAction } from 'react'
 import type { GatewaySession } from '@/lib/gateway-api'
 import { fetchSessions } from '@/lib/gateway-api'
+import { getConductorWorkerPersona } from '../conductor-worker-personas'
 
 type HistoryMessagePart = {
   type?: string
@@ -156,14 +157,8 @@ export type MissionHistoryEntry = {
 const HISTORY_STORAGE_KEY = 'conductor:history'
 const MAX_HISTORY_ENTRIES = 50
 
-const AGENT_NAMES = ['Nova', 'Pixel', 'Blaze', 'Echo', 'Sage', 'Drift', 'Flux', 'Volt']
-const AGENT_EMOJIS = ['🤖', '⚡', '🔥', '🌊', '🌿', '💫', '🔮', '⭐']
-
 function getAgentPersona(index: number) {
-  return {
-    name: AGENT_NAMES[index % AGENT_NAMES.length],
-    emoji: AGENT_EMOJIS[index % AGENT_EMOJIS.length],
-  }
+  return getConductorWorkerPersona(index)
 }
 
 function extractTasksFromPlan(planText: string): ConductorTask[] {

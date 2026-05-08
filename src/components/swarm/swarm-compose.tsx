@@ -5,6 +5,7 @@ import { HugeiconsIcon } from '@hugeicons/react'
 import { Rocket01Icon, CheckmarkCircle02Icon, AlertCircleIcon, Clock01Icon } from '@hugeicons/core-free-icons'
 import { cn } from '@/lib/utils'
 import type { CrewMember } from '@/hooks/use-crew-status'
+import { formatSwarmIdentity } from '@/components/swarm/swarm-identity'
 
 type WorkerResult = {
   workerId: string
@@ -96,7 +97,7 @@ export function SwarmCompose({ members, roomIds, className }: SwarmComposeProps)
               key={member.id}
               className="inline-flex items-center gap-1 rounded-full border border-emerald-400/40 bg-emerald-500/10 px-2 py-0.5 text-emerald-300"
             >
-              {member.displayName || member.id}
+              {formatSwarmIdentity(member.displayName, member.id)}
             </span>
           ))
         )}

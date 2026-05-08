@@ -5,6 +5,7 @@ import { HugeiconsIcon } from '@hugeicons/react'
 import { Activity01Icon } from '@hugeicons/core-free-icons'
 import { cn } from '@/lib/utils'
 import type { CrewMember } from '@/hooks/use-crew-status'
+import { formatSwarmIdentity } from '@/components/swarm/swarm-identity'
 
 type RuntimeEntry = {
   workerId: string
@@ -64,7 +65,7 @@ function buildRows(
         rows.push({
           id: `${member.id}-tail`,
           workerId: member.id,
-          workerName: member.displayName || member.id,
+          workerName: formatSwarmIdentity(member.displayName, member.id),
           text: last,
           ts: entry.lastOutputAt ?? entry.lastSessionStartedAt ?? null,
           kind: 'tail',
@@ -76,7 +77,7 @@ function buildRows(
       rows.push({
         id: `${member.id}-task`,
         workerId: member.id,
-        workerName: member.displayName || member.id,
+        workerName: formatSwarmIdentity(member.displayName, member.id),
         text: entry.currentTask,
         ts: entry.lastOutputAt ?? null,
         kind: 'task',
@@ -87,7 +88,7 @@ function buildRows(
       rows.push({
         id: `${member.id}-session`,
         workerId: member.id,
-        workerName: member.displayName || member.id,
+        workerName: formatSwarmIdentity(member.displayName, member.id),
         text: member.lastSessionTitle,
         ts: member.lastSessionAt,
         kind: 'session',

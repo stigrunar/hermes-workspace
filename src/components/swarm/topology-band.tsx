@@ -10,6 +10,10 @@ import {
 import type { CrewMember } from '@/hooks/use-crew-status'
 import { cn } from '@/lib/utils'
 import { getOnlineStatus } from '@/hooks/use-crew-status'
+import {
+  formatSwarmIdentity,
+  formatSwarmRoleBadge,
+} from '@/components/swarm/swarm-identity'
 
 type Props = {
   members: Array<CrewMember>
@@ -17,36 +21,6 @@ type Props = {
   roomIds: Array<string>
   onSelect: (id: string) => void
   onToggleRoom: (id: string) => void
-}
-
-function workerRole(id: string): string {
-  const m = id.match(/(\d+)/)
-  const n = m ? m[1] : ''
-  switch (n) {
-    case '1':
-    case '12':
-      return 'PR'
-    case '2':
-      return 'Qwen'
-    case '3':
-      return 'Bench'
-    case '4':
-      return 'Research'
-    case '5':
-    case '10':
-      return 'Build'
-    case '6':
-    case '11':
-      return 'Review'
-    case '7':
-      return 'Docs'
-    case '8':
-      return 'Ops'
-    case '9':
-      return 'Hack'
-    default:
-      return 'Worker'
-  }
 }
 
 export function TopologyBand({
@@ -76,7 +50,7 @@ export function TopologyBand({
             </div>
             <div className="truncate text-sm font-semibold text-white">
               {selected
-                ? `Focused: ${selected.displayName || selected.id}`
+                ? `Focused: ${formatSwarmIdentity(selected.displayName, selected.id)}`
                 : 'Select a worker'}
             </div>
           </div>
@@ -97,6 +71,7 @@ export function TopologyBand({
               const status = getOnlineStatus(member)
               const inRoom = roomIds.includes(member.id)
               const isSelected = member.id === selectedId
+              const role = formatSwarmRoleBadge(member.role)
               return (
                 <div key={member.id} className="relative shrink-0">
                   <button
@@ -122,10 +97,10 @@ export function TopologyBand({
                     />
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-xs font-semibold text-white">
-                        {member.displayName || member.id}
+                        {formatSwarmIdentity(member.displayName, member.id)}
                       </span>
                       <span className="block truncate text-[10px] text-emerald-100/45">
-                        {workerRole(member.id)} · {status}
+                        {role} · {status}
                       </span>
                     </span>
                   </button>

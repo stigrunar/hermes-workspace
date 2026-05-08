@@ -19,6 +19,10 @@ import { Swarm2TaskQueue } from './swarm2-task-queue'
 import type { CrewMember } from '@/hooks/use-crew-status'
 import { getOnlineStatus } from '@/hooks/use-crew-status'
 import { cn } from '@/lib/utils'
+import {
+  formatSwarmIdentity,
+  formatSwarmRoleBadge,
+} from '@/components/swarm/swarm-identity'
 
 type WorkerState =
   | 'active'
@@ -40,37 +44,6 @@ const WORKER_COLORS = [
   '#84cc16',
   '#f472b6',
 ]
-
-function roleFromId(id: string): string {
-  const m = id.match(/(\d+)/)
-  const n = m ? m[1] : ''
-  switch (n) {
-    case '1':
-      return 'PR / Issues'
-    case '2':
-      return 'Qwen PC1'
-    case '3':
-      return 'BenchLoop'
-    case '4':
-      return 'Research'
-    case '5':
-    case '10':
-      return 'Builder'
-    case '6':
-    case '11':
-      return 'Reviewer'
-    case '7':
-      return 'Docs'
-    case '8':
-      return 'Ops'
-    case '9':
-      return 'Hackathon'
-    case '12':
-      return 'PR / Issues'
-    default:
-      return 'Worker'
-  }
-}
 
 function deriveWorkerState(member: CrewMember, currentTask: string | null): WorkerState {
   const status = getOnlineStatus(member)
@@ -230,8 +203,11 @@ export function OperationalWorkerCard({
   const [taskComposerOpen, setTaskComposerOpen] = useState(false)
   const state = deriveWorkerState(member, currentTask)
   const status = statusStyles(state)
-  const role = settings.role || member.role || roleFromId(member.id)
-  const displayName = settings.displayName || member.displayName || member.id
+  const role = formatSwarmRoleBadge(settings.role || member.role)
+  const displayName = formatSwarmIdentity(
+    settings.displayName || member.displayName,
+    member.id,
+  )
 
   // Reuse the project endpoint so artifacts can fall back to git-changed files
   // and so the inline preview gets a verified URL.
@@ -316,7 +292,7 @@ export function OperationalWorkerCard({
   useEffect(() => {
     if (!settingsOpen) return
     setDraftName(settings.displayName || member.displayName || '')
-    setDraftRole(settings.role || member.role || roleFromId(member.id))
+    setDraftRole(settings.role || member.role || 'Worker')
     setDraftModel(settings.modelLabel || baseModelLabel)
     setDraftAvatar(settings.avatarGlyph || '')
   }, [settingsOpen, settings, member.displayName, member.role, member.id, baseModelLabel])
@@ -624,7 +600,7 @@ export function OperationalWorkerCard({
                   onChange={(event) => setDraftRole(event.target.value)}
                   className="w-full rounded-xl border border-[var(--theme-border)] bg-[var(--theme-bg)] px-3 py-2 text-[var(--theme-text)] outline-none"
                 >
-                  {Array.from(new Set([draftRole || member.role || roleFromId(member.id), ...ROLE_OPTIONS].filter(Boolean))).map((option) => (
+                  {Array.from(new Set([draftRole || member.role || 'Worker', ...ROLE_OPTIONS].filter(Boolean))).map((option) => (
                     <option key={option} value={option}>
                       {option}
                     </option>

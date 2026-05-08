@@ -16,6 +16,7 @@ import type { ReactNode } from 'react'
 import type { CrewMember } from '@/hooks/use-crew-status'
 import { cn } from '@/lib/utils'
 import { getOnlineStatus } from '@/hooks/use-crew-status'
+import { formatSwarmIdentity } from '@/components/swarm/swarm-identity'
 
 type WidgetRailProps = {
   members: Array<CrewMember>
@@ -189,7 +190,7 @@ export function WidgetRail({
                   key={id}
                   className="inline-flex items-center gap-1 rounded-full border border-emerald-400/35 bg-emerald-500/10 px-2 py-0.5 text-[11px] text-emerald-100"
                 >
-                  {m.displayName || m.id}
+                  {formatSwarmIdentity(m.displayName, m.id)}
                   <button
                     type="button"
                     onClick={() => onToggleRoom(id)}

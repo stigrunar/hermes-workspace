@@ -24,7 +24,7 @@ import {
   type SwarmTerminalKind,
   type SwarmWorkerState,
 } from '../../server/swarm-foundation'
-import { rosterByWorkerId } from '../../server/swarm-roster'
+import { rosterByWorkerId, fallbackDisplayName, fallbackRoleForWorker } from '../../server/swarm-roster'
 import { readSwarmMode, writeSwarmMode } from '../../server/swarm-mode'
 
 type RuntimeEntry = {
@@ -66,16 +66,8 @@ type RuntimeEntry = {
   previews: Array<SwarmPreviewMetadata>
 }
 
-function titleCase(value: string): string {
-  return value
-    .split(/[-_\s]+/)
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(' ')
-}
-
 function listWorkerIds(): string[] {
-  return listSwarmWorkerIds()
+  return listSwarmWorkerIds({ swarmOnly: true })
 }
 
 function lastLogTail(
@@ -141,6 +133,8 @@ async function buildEntry(
     workspaceRoot: process.cwd(),
   })
   const roster = rosterByWorkerId([workerId]).get(workerId)
+  const displayName = roster?.name || fallbackDisplayName(workerId)
+  const role = roster?.role || fallbackRoleForWorker(workerId)
   const { tail, lastSessionStartedAt, logPath } = lastLogTail(profilePath)
   const matched = tmuxAvailable
     ? await probeTmuxName(workerId, getSwarmTmuxSessionName(workerId))
@@ -188,8 +182,8 @@ async function buildEntry(
 
   return {
     workerId,
-    displayName: roster?.name || titleCase(workerId),
-    role: roster?.role || runtime.role,
+    displayName,
+    role,
     source,
     pid: lifecycle.pid,
     startedAt: runtime.startedAt,

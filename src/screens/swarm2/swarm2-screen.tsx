@@ -27,6 +27,7 @@ import { Swarm2ActivityFeed } from './swarm2-activity-feed'
 import { Swarm2KanbanBoard } from './swarm2-kanban-board'
 import { Swarm2ReportsView, buildSwarm2InboxLanes, type Swarm2InboxItem } from './swarm2-reports-view'
 import { RouterChat } from '@/components/swarm/router-chat'
+import { formatSwarmIdentity } from '@/components/swarm/swarm-identity'
 import { SwarmTerminal } from '@/components/swarm/swarm-terminal'
 import { WorkflowHelpModal } from '@/components/workflow-help-modal'
 import { cn } from '@/lib/utils'
@@ -57,7 +58,7 @@ const SWARM2_OPERATION_THEME: CSSProperties = {
 
 export const SWARM2_INFORMATION_HIERARCHY = [
   'Status header: online workers, active room, refresh state, view switch.',
-  'Orchestrator hub card: top-center primary routing hub with aggregate state and router affordance.',
+  'Aurora/orchestrator hub card: top-center primary routing hub with aggregate state and router affordance.',
   'Visible routing wires: subdued connection lines from the orchestrator to every worker, highlighted for selected and wired room nodes.',
   'Operations-style worker node cards: role, state, current task, last useful signal, direct inline chat/action affordances.',
   'Minimal attention rail: only auth, worker availability, room count, selected runtime metadata.',
@@ -873,7 +874,11 @@ function ControlPlaneStage({
                 <span>
                   Focus mode on{' '}
                   <span className="font-semibold text-[var(--theme-text)]">
-                    {members.find((member) => member.id === focusedRuntimeWorkerId)?.displayName || focusedRuntimeWorkerId}
+                    {formatSwarmIdentity(
+                      members.find((member) => member.id === focusedRuntimeWorkerId)
+                        ?.displayName,
+                      focusedRuntimeWorkerId,
+                    )}
                   </span>
                 </span>
                 <button
@@ -900,7 +905,10 @@ function ControlPlaneStage({
                       : cmd.kind === 'log-tail'
                         ? 'border-[var(--theme-warning-border)] bg-[var(--theme-warning-soft)] text-[var(--theme-warning)]'
                         : 'border-[var(--theme-border)] bg-[var(--theme-card2)] text-[var(--theme-muted)]'
-                  const titleLabel = member.displayName || member.id
+                  const titleLabel = formatSwarmIdentity(
+                    member.displayName,
+                    member.id,
+                  )
                   const modelLabel = formatAssignedModel(member.model, member.provider)
                   return (
                     <div key={member.id} className="overflow-hidden rounded-[1.5rem] border border-[var(--theme-border)] bg-[var(--theme-card)] shadow-[0_20px_60px_color-mix(in_srgb,var(--theme-shadow)_14%,transparent)]">
@@ -1294,7 +1302,7 @@ export function Swarm2Screen() {
         const ts = runtime?.lastOutputAt ?? runtime?.lastSessionStartedAt ?? member.lastSessionAt ?? null
         return {
           workerId: member.id,
-          workerName: member.displayName || member.id,
+          workerName: formatSwarmIdentity(member.displayName, member.id),
           role: member.role || runtime?.role || 'Worker',
           task: displayTaskTitle(runtime, 'Awaiting checkpoint'),
           progress: progressForRuntime(runtime),
@@ -1407,7 +1415,7 @@ export function Swarm2Screen() {
             : 'idle'
         return {
           workerId: member.id,
-          workerName: member.displayName || member.id,
+          workerName: formatSwarmIdentity(member.displayName, member.id),
           text: compactText(rawText, 72),
           age: relativeTime(ts),
           ts: ts ?? 0,

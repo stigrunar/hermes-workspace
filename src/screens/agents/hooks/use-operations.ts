@@ -5,6 +5,7 @@ import { toast } from '@/components/ui/toast'
 import { fetchCronJobs } from '@/lib/cron-api'
 import { fetchSessions, type GatewaySession } from '@/lib/gateway-api'
 import { formatModelName, formatRelativeTime } from '@/screens/dashboard/lib/formatters'
+import { formatOperatorIdentity } from '@/lib/operator-identity'
 
 // Claude-Workspace adapter: Operations is backed by Hermes profiles
 // (each profile = one persistent agent). Profiles live at ~/.hermes/profiles/<name>/
@@ -241,7 +242,7 @@ async function fetchOperationsConfig(): Promise<ConfigPayload> {
   const profiles = await fetchClaudeProfiles()
   const list = profiles.map((profile) => ({
     id: profile.name,
-    name: profile.name === 'default' ? 'Workspace' : profile.name,
+    name: formatOperatorIdentity(undefined, profile.name),
     model: profile.model || '',
     workspace: profile.path,
     agentDir: profile.path,

@@ -7,9 +7,10 @@ import { WorkflowHelpModal } from '@/components/workflow-help-modal'
 import { Markdown } from '@/components/prompt-kit/markdown'
 import { OfficeView } from './components/office-view'
 import type { AgentWorkingRow } from './components/agents-working-panel'
-import { type GatewaySession } from '@/lib/gateway-api'
+import type { GatewaySession } from '@/lib/gateway-api'
 import { cn } from '@/lib/utils'
 import { type MissionHistoryEntry, type MissionHistoryWorkerDetail, useConductorGateway } from './hooks/use-conductor-gateway'
+import { getConductorWorkerPersona } from './conductor-worker-personas'
 
 type ConductorPhase = 'home' | 'preview' | 'active' | 'complete'
 type QuickActionId = 'research' | 'build' | 'review' | 'deploy'
@@ -96,8 +97,6 @@ const QUICK_ACTIONS: Array<{
   },
 ]
 
-const AGENT_NAMES = ['Nova', 'Pixel', 'Blaze', 'Echo', 'Sage', 'Drift', 'Flux', 'Volt']
-const AGENT_EMOJIS = ['🤖', '⚡', '🔥', '🌊', '🌿', '💫', '🔮', '⭐']
 const BLENDED_COST_PER_MILLION_TOKENS = 5
 const CONDUCTOR_GOAL_DRAFT_STORAGE_KEY = 'conductor:goal-draft'
 
@@ -122,10 +121,7 @@ function persistConductorGoalDraft(value: string): void {
 }
 
 function getAgentPersona(index: number) {
-  return {
-    name: AGENT_NAMES[index % AGENT_NAMES.length],
-    emoji: AGENT_EMOJIS[index % AGENT_EMOJIS.length],
-  }
+  return getConductorWorkerPersona(index)
 }
 
 function estimateTokenCost(totalTokens: number): number {
@@ -927,34 +923,37 @@ export function Conductor() {
       })),
     [selectedHistoryEntry],
   )
-  const OFFICE_NAMES = ['Nova', 'Pixel', 'Blaze', 'Echo', 'Sage', 'Drift']
   const homeOfficeRows = useMemo<AgentWorkingRow[]>(() => {
     const sessions = conductor.recentSessions
     if (sessions.length === 0) {
-      return OFFICE_NAMES.slice(0, 3).map((name, i) => ({
-        id: `placeholder-${i}`,
-        name,
-        modelId: 'auto',
-        status: 'idle' as const,
-        lastLine: 'Waiting for work…',
-        taskCount: 0,
-        roleDescription: 'Worker',
-      }))
+      return Array.from({ length: 3 }, (_, i) => {
+        const persona = getAgentPersona(i)
+        return {
+          id: `placeholder-${i}`,
+          name: persona.name,
+          modelId: 'auto',
+          status: 'idle' as const,
+          lastLine: 'Waiting for work…',
+          taskCount: 0,
+          roleDescription: 'Mission worker',
+        }
+      })
     }
     return sessions.slice(0, 6).map((session, i) => {
       const s = session as GatewaySession
+      const persona = getAgentPersona(i)
       const updatedAt = typeof s.updatedAt === 'string' ? new Date(s.updatedAt).getTime() : typeof s.updatedAt === 'number' ? s.updatedAt : 0
       const statusText = `${s.status ?? ''} ${s.kind ?? ''}`.toLowerCase()
       const status = /error|failed/.test(statusText) ? ('error' as const) : /pause/.test(statusText) ? ('paused' as const) : Date.now() - updatedAt < 120_000 ? ('active' as const) : ('idle' as const)
       return {
         id: s.key ?? `session-${i}`,
-        name: OFFICE_NAMES[i % OFFICE_NAMES.length],
+        name: persona.name,
         modelId: s.model ?? 'auto',
         status,
         lastLine: s.task ?? s.label ?? s.title ?? s.derivedTitle ?? 'Working…',
         lastAt: updatedAt || undefined,
         taskCount: 0,
-        roleDescription: s.label ?? 'Worker',
+        roleDescription: s.label ?? 'Mission worker',
         sessionKey: s.key ?? undefined,
       }
     })
@@ -986,9 +985,9 @@ export function Conductor() {
     return [
       {
         id: 'conductor-placeholder-agent',
-        name: 'Nova',
+        name: getAgentPersona(0).name,
         modelId: conductor.conductorSettings.workerModel || 'auto',
-        roleDescription: 'Waiting for workers',
+        roleDescription: 'Waiting for mission workers',
         status: 'spawning',
         lastLine: conductor.goal || 'Preparing the office…',
         taskCount: 0,
