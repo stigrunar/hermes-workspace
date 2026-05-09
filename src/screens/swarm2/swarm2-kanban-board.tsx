@@ -20,6 +20,9 @@ type SwarmKanbanCard = {
   createdBy: string
   createdAt: number
   updatedAt: number
+  boardSlug?: string
+  boardLabel?: string
+  boardSource?: KanbanBoardOption['source']
 }
 
 type KanbanWorker = {
@@ -43,7 +46,7 @@ type KanbanBoardOption = {
   description?: string | null
   available: boolean
   current: boolean
-  source: 'dashboard' | 'sqlite' | 'local'
+  source: 'aggregate' | 'dashboard' | 'sqlite' | 'local'
 }
 
 type KanbanSelectedBoard = {
@@ -118,6 +121,12 @@ type KanbanBackendPresentation = {
   dashboardUrl?: string
 }
 
+type SelectedKanbanTask = {
+  id: string
+  boardSlug: string
+  boardLabel: string
+}
+
 export function getKanbanBackendPresentation(backend: KanbanBackendMeta | null | undefined): KanbanBackendPresentation {
   if (!backend) {
     return {
@@ -178,6 +187,26 @@ const LANE_TONE: Record<KanbanLane, string> = {
   done: 'border-green-400/40 bg-green-500/10 text-green-700',
 }
 
+const ALL_BOARDS_SLUG = 'all'
+
+const BOARD_BADGE_TONES = [
+  'border-cyan-400/40 bg-cyan-500/10 text-cyan-700',
+  'border-fuchsia-400/40 bg-fuchsia-500/10 text-fuchsia-700',
+  'border-lime-400/40 bg-lime-500/10 text-lime-700',
+  'border-orange-400/40 bg-orange-500/10 text-orange-700',
+  'border-sky-400/40 bg-sky-500/10 text-sky-700',
+  'border-rose-400/40 bg-rose-500/10 text-rose-700',
+] as const
+
+export function getBoardBadgeTone(slug: string | null | undefined): string {
+  const value = slug?.trim() || ALL_BOARDS_SLUG
+  let hash = 0
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0
+  }
+  return BOARD_BADGE_TONES[hash % BOARD_BADGE_TONES.length]
+}
+
 type KanbanBoardQuery = {
   cards: Array<SwarmKanbanCard>
   backend: KanbanBackendMeta | null
@@ -235,8 +264,8 @@ export function Swarm2KanbanBoard({
   onOpenRouter,
   className,
 }: Swarm2KanbanBoardProps) {
-  const [requestedBoard, setRequestedBoard] = useState(MATRIX_DEFAULT_BOARD_SLUG)
-  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
+  const [requestedBoard, setRequestedBoard] = useState(ALL_BOARDS_SLUG)
+  const [selectedTask, setSelectedTask] = useState<SelectedKanbanTask | null>(null)
   const [backendToast, setBackendToast] = useState<KanbanBackendPresentation | null>(null)
   const lastToastedBackendKey = useRef<string | null>(null)
 
@@ -248,9 +277,9 @@ export function Swarm2KanbanBoard({
   })
 
   const detailQuery = useQuery({
-    enabled: Boolean(selectedTaskId),
-    queryKey: ['swarm2', 'kanban', requestedBoard, 'detail', selectedTaskId],
-    queryFn: () => fetchKanbanBoard(requestedBoard, selectedTaskId).then((data) => data.taskDetail),
+    enabled: Boolean(selectedTask),
+    queryKey: ['swarm2', 'kanban', selectedTask?.boardSlug, 'detail', selectedTask?.id],
+    queryFn: () => fetchKanbanBoard(selectedTask?.boardSlug ?? requestedBoard, selectedTask?.id).then((data) => data.taskDetail),
     staleTime: 2_000,
   })
 
@@ -300,7 +329,7 @@ export function Swarm2KanbanBoard({
           <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--theme-muted)]">Matrix board</div>
           <h2 className="mt-1 text-lg font-semibold text-[var(--theme-text)]">{MATRIX_BOARD_LABEL}</h2>
           <p className="mt-1 max-w-3xl text-xs leading-relaxed text-[var(--theme-muted-2)]">
-            The Matrix prefers the named <code>{MATRIX_DEFAULT_BOARD_SLUG}</code> board when it exists, falls back to root safely when it does not, and keeps this surface read-only while drill-down matures.
+            The Matrix now opens on <code>all</code> boards, labels every card by its source board, and still lets you narrow back to <code>{MATRIX_DEFAULT_BOARD_SLUG}</code> or root when needed.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--theme-muted)]">
@@ -358,7 +387,7 @@ export function Swarm2KanbanBoard({
             value={selectedBoard?.slug ?? requestedBoard}
             onChange={(event) => {
               setRequestedBoard(event.target.value)
-              setSelectedTaskId(null)
+              setSelectedTask(null)
             }}
             className="rounded-lg border border-[var(--theme-border)] bg-[var(--theme-card)] px-2 py-1 text-xs text-[var(--theme-text)] outline-none"
           >
@@ -409,13 +438,22 @@ export function Swarm2KanbanBoard({
                   <div className="rounded-xl border border-dashed border-[var(--theme-border)] p-3 text-xs text-[var(--theme-muted)]">Waiting for source…</div>
                 ) : laneCards.length === 0 ? (
                   <div className="rounded-xl border border-dashed border-[var(--theme-border)] p-3 text-xs text-[var(--theme-muted)]">Empty</div>
-                ) : laneCards.map((card) => (
+                ) : laneCards.map((card) => {
+                  const cardBoardSlug = card.boardSlug ?? selectedBoard?.slug ?? requestedBoard
+                  const cardBoardLabel = card.boardLabel ?? selectedBoard?.label ?? cardBoardSlug
+                  return (
                   <button
-                    key={card.id}
+                    key={`${cardBoardSlug}:${card.id}`}
                     type="button"
-                    onClick={() => setSelectedTaskId(card.id)}
+                    onClick={() => setSelectedTask({ id: card.id, boardSlug: cardBoardSlug, boardLabel: cardBoardLabel })}
                     className="w-full rounded-xl border border-[var(--theme-border)] bg-[var(--theme-card)] p-3 text-left shadow-sm transition hover:border-[var(--theme-border2)] hover:bg-[var(--theme-card2)]"
                   >
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <span className={cn('min-w-0 truncate rounded-full border px-2 py-0.5 text-[10px] font-semibold', getBoardBadgeTone(cardBoardSlug))} title={cardBoardSlug}>
+                        {cardBoardLabel}
+                      </span>
+                      <span className="shrink-0 text-[10px] text-[var(--theme-muted)]">{card.status}</span>
+                    </div>
                     <div className="text-sm font-semibold leading-snug text-[var(--theme-text)]">{card.title}</div>
                     {card.spec ? <p className="mt-2 line-clamp-3 text-xs leading-relaxed text-[var(--theme-muted-2)]">{card.spec}</p> : null}
                     <div className="mt-3 space-y-1 text-[10px] text-[var(--theme-muted)]">
@@ -435,23 +473,26 @@ export function Swarm2KanbanBoard({
                       </span>
                     </div>
                   </button>
-                ))}
+                  )
+                })}
               </div>
             </div>
           )
         })}
       </div>
 
-      {selectedTaskId ? (
+      {selectedTask ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 px-4 py-6 backdrop-blur-sm">
           <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-3xl border border-[var(--theme-border2)] bg-[var(--theme-card)] p-5 shadow-[0_30px_100px_var(--theme-shadow)]">
             <div className="mb-4 flex items-start justify-between gap-3">
               <div>
                 <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--theme-muted)]">Task drill-down</div>
-                <h3 className="mt-1 text-lg font-semibold text-[var(--theme-text)]">{detail?.title ?? selectedTaskId}</h3>
-                <p className="mt-1 text-xs text-[var(--theme-muted-2)]">Board: {selectedBoard?.label ?? requestedBoard} · Read-only first slice for safer parity with Hermes Kanban.</p>
+                <h3 className="mt-1 text-lg font-semibold text-[var(--theme-text)]">{detail?.title ?? selectedTask.id}</h3>
+                <p className="mt-1 text-xs text-[var(--theme-muted-2)]">
+                  Board: <span className={cn('rounded-full border px-2 py-0.5 font-semibold', getBoardBadgeTone(detail?.board ?? selectedTask.boardSlug))} title={detail?.board ?? selectedTask.boardSlug}>{selectedTask.boardLabel}</span> · Read-only first slice for safer parity with Hermes Kanban.
+                </p>
               </div>
-              <button type="button" onClick={() => setSelectedTaskId(null)} className="rounded-lg border border-[var(--theme-border)] bg-[var(--theme-card2)] px-3 py-1.5 text-sm text-[var(--theme-muted)] hover:text-[var(--theme-text)]">Close</button>
+              <button type="button" onClick={() => setSelectedTask(null)} className="rounded-lg border border-[var(--theme-border)] bg-[var(--theme-card2)] px-3 py-1.5 text-sm text-[var(--theme-muted)] hover:text-[var(--theme-text)]">Close</button>
             </div>
 
             {detailQuery.isLoading ? (

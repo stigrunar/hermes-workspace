@@ -23,7 +23,7 @@ export type SwarmKanbanBoardOption = {
   description: string | null
   available: boolean
   current: boolean
-  source: 'dashboard' | 'sqlite' | 'local'
+  source: 'aggregate' | 'dashboard' | 'sqlite' | 'local'
 }
 
 export type SwarmKanbanSelectedBoard = {
@@ -33,6 +33,14 @@ export type SwarmKanbanSelectedBoard = {
   description: string | null
   fallback: boolean
 }
+
+export type SwarmKanbanCardBoardMeta = {
+  boardSlug: string
+  boardLabel: string
+  boardSource: SwarmKanbanBoardOption['source']
+}
+
+export type SwarmKanbanCardWithBoard = SwarmKanbanCard & SwarmKanbanCardBoardMeta
 
 export type SwarmKanbanTaskComment = {
   author: string | null
@@ -106,12 +114,15 @@ type SqliteRunRow = {
 
 type ResolvedBoard = SwarmKanbanSelectedBoard & {
   dbPath: string | null
-  source: 'dashboard' | 'sqlite' | 'local'
+  source: SwarmKanbanBoardOption['source']
 }
+
+const ALL_BOARDS_SLUG = 'all'
 
 function normalizeBoardSlug(input: string | null | undefined): string | null {
   const value = input?.trim().toLowerCase()
   if (!value) return null
+  if (value === ALL_BOARDS_SLUG || value === 'boards' || value === 'aggregate') return ALL_BOARDS_SLUG
   if (value === 'root' || value === 'main') return 'default'
   if (value === 'matrix' || value === 'the-matrix') return MATRIX_DEFAULT_BOARD_SLUG
   return value
@@ -205,6 +216,30 @@ function sqliteTaskToCard(task: SqliteTaskRow): SwarmKanbanCard {
   }
 }
 
+function withBoardMeta(card: SwarmKanbanCard, board: Pick<SwarmKanbanBoardOption, 'slug' | 'label' | 'source'>): SwarmKanbanCardWithBoard {
+  return {
+    ...card,
+    boardSlug: board.slug,
+    boardLabel: board.label,
+    boardSource: board.source,
+  }
+}
+
+function aggregateBoardOption(boards: Array<SwarmKanbanBoardOption>): SwarmKanbanBoardOption {
+  return {
+    slug: ALL_BOARDS_SLUG,
+    label: 'All boards',
+    description: `${boards.length} discovered board${boards.length === 1 ? '' : 's'}`,
+    available: boards.length > 0,
+    current: false,
+    source: 'aggregate',
+  }
+}
+
+function withAggregateOption(boards: Array<SwarmKanbanBoardOption>): Array<SwarmKanbanBoardOption> {
+  return [aggregateBoardOption(boards), ...boards]
+}
+
 async function discoverBoards(): Promise<Array<SwarmKanbanBoardOption>> {
   if (getCapabilities().kanban) {
     const response = await listDashboardKanbanBoards()
@@ -266,6 +301,17 @@ async function discoverBoards(): Promise<Array<SwarmKanbanBoardOption>> {
 async function resolveBoard(requestedBoard?: string | null): Promise<ResolvedBoard> {
   const requested = normalizeBoardSlug(requestedBoard)
   const boards = await discoverBoards()
+  if (requested === ALL_BOARDS_SLUG) {
+    return {
+      requested,
+      slug: ALL_BOARDS_SLUG,
+      label: 'All boards',
+      description: `${boards.length} discovered board${boards.length === 1 ? '' : 's'}`,
+      fallback: false,
+      dbPath: null,
+      source: 'aggregate',
+    }
+  }
   const selected =
     (requested ? boards.find((board) => board.slug === requested) : undefined) ??
     boards.find((board) => board.slug === MATRIX_DEFAULT_BOARD_SLUG) ??
@@ -284,14 +330,37 @@ async function resolveBoard(requestedBoard?: string | null): Promise<ResolvedBoa
 }
 
 export async function listSwarmKanbanBoards(): Promise<Array<SwarmKanbanBoardOption>> {
-  return discoverBoards()
+  return withAggregateOption(await discoverBoards())
+}
+
+async function cardsForBoard(board: SwarmKanbanBoardOption): Promise<Array<SwarmKanbanCardWithBoard>> {
+  if (getCapabilities().kanban) {
+    const response = await fetchDashboardKanbanBoard(board.slug)
+    return response.columns.flatMap((column) => column.tasks.map((task) => withBoardMeta(sqliteTaskToCard(task), board)))
+  }
+
+  if (board.source === 'sqlite') {
+    const dbPath = boardDbPath(board.slug)
+    if (!dbPath) return []
+    const rows = sqliteJson<Array<SqliteTaskRow>>(
+      dbPath,
+      [
+        'select id, title, body, assignee, status, created_by, created_at, started_at, completed_at',
+        'from tasks',
+        'order by coalesce(completed_at, started_at, created_at) desc, id desc;',
+      ].join(' '),
+    )
+    return rows.map((row) => withBoardMeta(sqliteTaskToCard(row), board))
+  }
+
+  return listSwarmKanbanCards().map((card) => withBoardMeta(card, board))
 }
 
 export async function querySwarmKanbanBoard(input: {
   board?: string | null
   taskId?: string | null
 }): Promise<{
-  cards: Array<SwarmKanbanCard>
+  cards: Array<SwarmKanbanCardWithBoard>
   backend: KanbanBackendMeta
   boards: Array<SwarmKanbanBoardOption>
   selectedBoard: SwarmKanbanSelectedBoard
@@ -302,29 +371,29 @@ export async function querySwarmKanbanBoard(input: {
   const resolved = await resolveBoard(input.board)
   const backend = getKanbanBackendMeta()
 
-  let cards: Array<SwarmKanbanCard>
-  if (getCapabilities().kanban) {
-    const board = await fetchDashboardKanbanBoard(resolved.slug)
-    cards = board.columns.flatMap((column) => column.tasks.map((task) => sqliteTaskToCard(task)))
-    cards.sort((a, b) => b.updatedAt - a.updatedAt || a.title.localeCompare(b.title))
-  } else if (resolved.dbPath) {
-    const rows = sqliteJson<Array<SqliteTaskRow>>(
-      resolved.dbPath,
-      [
-        'select id, title, body, assignee, status, created_by, created_at, started_at, completed_at',
-        'from tasks',
-        'order by coalesce(completed_at, started_at, created_at) desc, id desc;',
-      ].join(' '),
-    )
-    cards = rows.map(sqliteTaskToCard)
+  let cards: Array<SwarmKanbanCardWithBoard>
+  if (resolved.slug === ALL_BOARDS_SLUG) {
+    cards = (await Promise.all(boards.map((board) => cardsForBoard(board)))).flat()
   } else {
-    cards = listSwarmKanbanCards()
+    const selectedBoard = boards.find((board) => board.slug === resolved.slug) ?? {
+      slug: resolved.slug,
+      label: resolved.label,
+      description: resolved.description,
+      available: true,
+      current: false,
+      source: resolved.source,
+    }
+    cards = await cardsForBoard(selectedBoard)
   }
+  cards.sort((a, b) => b.updatedAt - a.updatedAt || a.boardLabel.localeCompare(b.boardLabel) || a.title.localeCompare(b.title))
+  const detailBoard = resolved.slug === ALL_BOARDS_SLUG && input.taskId
+    ? cards.find((card) => card.id === input.taskId)?.boardSlug ?? resolved.slug
+    : resolved.slug
 
   return {
     cards,
     backend,
-    boards,
+    boards: withAggregateOption(boards),
     selectedBoard: {
       requested: resolved.requested,
       slug: resolved.slug,
@@ -333,7 +402,7 @@ export async function querySwarmKanbanBoard(input: {
       fallback: resolved.fallback,
     },
     readOnly: true,
-    taskDetail: input.taskId ? await getSwarmKanbanTaskDetail({ board: resolved.slug, taskId: input.taskId }) : null,
+    taskDetail: input.taskId ? await getSwarmKanbanTaskDetail({ board: detailBoard, taskId: input.taskId }) : null,
   }
 }
 
@@ -342,6 +411,30 @@ export async function getSwarmKanbanTaskDetail(input: {
   taskId: string
 }): Promise<SwarmKanbanTaskDetail | null> {
   const resolved = await resolveBoard(input.board)
+  if (getCapabilities().kanban) {
+    const task = await fetchDashboardKanbanTask(input.taskId, resolved.slug)
+    if (!task) return null
+    return {
+      id: task.id,
+      board: resolved.slug,
+      title: task.title,
+      status: task.status,
+      lane: mapStatusToLane(task.status),
+      assignee: task.assignee ?? null,
+      createdBy: task.created_by ?? null,
+      body: task.body ?? '',
+      result: null,
+      workspaceKind: task.workspace_kind ?? null,
+      workspacePath: task.workspace_path ?? null,
+      currentRunId: null,
+      createdAt: normalizeTimestamp(task.created_at),
+      startedAt: normalizeTimestamp(task.started_at),
+      completedAt: normalizeTimestamp(task.completed_at),
+      comments: [],
+      recentRuns: [],
+    }
+  }
+
   if (resolved.dbPath) {
     const taskRows = sqliteJson<Array<SqliteTaskRow>>(
       resolved.dbPath,
@@ -405,30 +498,6 @@ export async function getSwarmKanbanTaskDetail(input: {
         startedAt: normalizeTimestamp(run.started_at),
         endedAt: normalizeTimestamp(run.ended_at),
       })),
-    }
-  }
-
-  if (getCapabilities().kanban) {
-    const task = await fetchDashboardKanbanTask(input.taskId, resolved.slug)
-    if (!task) return null
-    return {
-      id: task.id,
-      board: resolved.slug,
-      title: task.title,
-      status: task.status,
-      lane: mapStatusToLane(task.status),
-      assignee: task.assignee ?? null,
-      createdBy: task.created_by ?? null,
-      body: task.body ?? '',
-      result: null,
-      workspaceKind: task.workspace_kind ?? null,
-      workspacePath: task.workspace_path ?? null,
-      currentRunId: null,
-      createdAt: normalizeTimestamp(task.created_at),
-      startedAt: normalizeTimestamp(task.started_at),
-      completedAt: normalizeTimestamp(task.completed_at),
-      comments: [],
-      recentRuns: [],
     }
   }
 

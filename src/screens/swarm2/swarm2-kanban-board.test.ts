@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getKanbanBackendPresentation } from './swarm2-kanban-board'
+import { getBoardBadgeTone, getKanbanBackendPresentation } from './swarm2-kanban-board'
 
 describe('Swarm2 Kanban backend presentation', () => {
   it('keeps the initial backend state quiet and non-committal while auto-detecting', () => {
@@ -41,5 +41,11 @@ describe('Swarm2 Kanban backend presentation', () => {
       toastTitle: 'Using local Swarm Board',
       toastBody: 'Using local Swarm board JSON store.',
     })
+  })
+
+  it('assigns board badge tones deterministically by slug', () => {
+    expect(getBoardBadgeTone('mission-control')).toBe(getBoardBadgeTone('mission-control'))
+    expect(getBoardBadgeTone('default')).toMatch(/^border-/)
+    expect(getBoardBadgeTone(null)).toBe(getBoardBadgeTone('all'))
   })
 })
