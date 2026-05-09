@@ -141,12 +141,23 @@ async function requestHandler(req, res) {
     if (served) return
   }
 
-  // Fall through to SSR handler
   const url = new URL(
     req.url || '/',
     `http://${req.headers.host || 'localhost'}`,
   )
 
+  // Missing hashed assets must not fall through to SSR HTML. If a browser has
+  // stale root HTML, returning HTML for a .js URL triggers strict MIME errors.
+  if ((req.method === 'GET' || req.method === 'HEAD') && decodeURIComponent(url.pathname).startsWith('/assets/')) {
+    res.writeHead(404, {
+      'Content-Type': 'text/plain; charset=utf-8',
+      'Cache-Control': 'no-store',
+    })
+    res.end('Asset not found')
+    return
+  }
+
+  // Fall through to SSR handler
   const headers = new Headers()
   for (const [key, value] of Object.entries(req.headers)) {
     if (value) headers.set(key, Array.isArray(value) ? value.join(', ') : value)
