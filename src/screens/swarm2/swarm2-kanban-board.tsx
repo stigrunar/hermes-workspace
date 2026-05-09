@@ -23,6 +23,7 @@ type SwarmKanbanCard = {
   boardSlug?: string
   boardLabel?: string
   boardSource?: KanbanBoardOption['source']
+  doneAudit?: KanbanDoneAudit | null
 }
 
 type KanbanWorker = {
@@ -74,6 +75,21 @@ type KanbanTaskRun = {
   endedAt: number | null
 }
 
+type KanbanOpenChild = {
+  id: string
+  title: string
+  status: string
+  assignee: string | null
+}
+
+type KanbanDoneAudit = {
+  openChildCount: number
+  openChildren: Array<KanbanOpenChild>
+  completedEventCount: number
+  completedRunCount: number
+  warnings: Array<string>
+}
+
 type KanbanTaskDetail = {
   id: string
   board: string
@@ -92,6 +108,7 @@ type KanbanTaskDetail = {
   completedAt: number | null
   comments: Array<KanbanTaskComment>
   recentRuns: Array<KanbanTaskRun>
+  doneAudit: KanbanDoneAudit | null
 }
 
 type KanbanResponse = {
@@ -175,7 +192,7 @@ const LANES: Array<{ id: KanbanLane; label: string; hint: string }> = [
   { id: 'running', label: 'Running', hint: 'Worker executing' },
   { id: 'review', label: 'Review', hint: 'Needs peer/human check' },
   { id: 'blocked', label: 'Blocked', hint: 'Needs input or dependency' },
-  { id: 'done', label: 'Done', hint: 'Accepted / archived' },
+  { id: 'done', label: 'Done', hint: 'Scoped slice accepted' },
 ]
 
 const LANE_TONE: Record<KanbanLane, string> = {
@@ -205,6 +222,10 @@ export function getBoardBadgeTone(slug: string | null | undefined): string {
     hash = (hash * 31 + value.charCodeAt(index)) >>> 0
   }
   return BOARD_BADGE_TONES[hash % BOARD_BADGE_TONES.length]
+}
+
+function doneAuditLacksEvidence(audit: KanbanDoneAudit | null | undefined): boolean {
+  return Boolean(audit?.warnings.length) && audit?.completedEventCount === 0 && audit.completedRunCount === 0
 }
 
 type KanbanBoardQuery = {
@@ -320,6 +341,8 @@ export function Swarm2KanbanBoard({
   const total = query.data?.cards.length ?? 0
   const reviewCount = cardsByLane.get('review')?.length ?? 0
   const blockedCount = cardsByLane.get('blocked')?.length ?? 0
+  const doneWithFollowUpCount = (cardsByLane.get('done') ?? []).filter((card) => (card.doneAudit?.openChildCount ?? 0) > 0).length
+  const doneMissingEvidenceCount = (cardsByLane.get('done') ?? []).filter((card) => doneAuditLacksEvidence(card.doneAudit)).length
   const detail = detailQuery.data ?? null
 
   return (
@@ -364,6 +387,12 @@ export function Swarm2KanbanBoard({
           )}
           <span className="rounded-full border border-[var(--theme-border)] bg-[var(--theme-bg)] px-2 py-1">{reviewCount} review</span>
           <span className="rounded-full border border-[var(--theme-border)] bg-[var(--theme-bg)] px-2 py-1">{blockedCount} blocked</span>
+          {doneWithFollowUpCount > 0 ? (
+            <span className="rounded-full border border-amber-400/40 bg-amber-500/10 px-2 py-1 font-medium text-amber-700">{doneWithFollowUpCount} done slices have follow-up</span>
+          ) : null}
+          {doneMissingEvidenceCount > 0 ? (
+            <span className="rounded-full border border-red-400/40 bg-red-500/10 px-2 py-1 font-medium text-red-700">{doneMissingEvidenceCount} done missing evidence</span>
+          ) : null}
         </div>
       </div>
 
@@ -455,6 +484,20 @@ export function Swarm2KanbanBoard({
                       <span className="shrink-0 text-[10px] text-[var(--theme-muted)]">{card.status}</span>
                     </div>
                     <div className="text-sm font-semibold leading-snug text-[var(--theme-text)]">{card.title}</div>
+                    {card.doneAudit?.warnings.length ? (
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {card.doneAudit.openChildCount > 0 ? (
+                          <span className="rounded-full border border-amber-400/40 bg-amber-500/10 px-2 py-1 text-[10px] font-semibold text-amber-700">
+                            Slice done · {card.doneAudit.openChildCount} follow-up open/blocked
+                          </span>
+                        ) : null}
+                        {doneAuditLacksEvidence(card.doneAudit) ? (
+                          <span className="rounded-full border border-red-400/40 bg-red-500/10 px-2 py-1 text-[10px] font-semibold text-red-700">
+                            Done lacks completion evidence
+                          </span>
+                        ) : null}
+                      </div>
+                    ) : null}
                     {card.spec ? <p className="mt-2 line-clamp-3 text-xs leading-relaxed text-[var(--theme-muted-2)]">{card.spec}</p> : null}
                     <div className="mt-3 space-y-1 text-[10px] text-[var(--theme-muted)]">
                       <div>Assignee: <span className="font-semibold text-[var(--theme-text)]">{workerLabel(workers, card.assignedWorker)}</span></div>
@@ -519,6 +562,30 @@ export function Swarm2KanbanBoard({
                     <div className="mt-1 font-semibold text-[var(--theme-text)]">{detail.currentRunId ?? '—'}</div>
                   </div>
                 </div>
+
+                {detail.doneAudit?.warnings.length ? (
+                  <div className="rounded-2xl border border-amber-400/40 bg-amber-500/10 p-4 text-xs text-amber-800">
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.18em]">Done semantics guard</div>
+                    <div className="mt-2 space-y-1">
+                      {detail.doneAudit.warnings.map((warning) => (
+                        <div key={warning}>• {warning}</div>
+                      ))}
+                      <div>Completion events: <span className="font-semibold">{detail.doneAudit.completedEventCount}</span></div>
+                      <div>Completed runs: <span className="font-semibold">{detail.doneAudit.completedRunCount}</span></div>
+                    </div>
+                    {detail.doneAudit.openChildren.length > 0 ? (
+                      <div className="mt-3 space-y-2">
+                        <div className="font-semibold">Open linked follow-up</div>
+                        {detail.doneAudit.openChildren.map((child) => (
+                          <div key={child.id} className="rounded-xl border border-amber-400/30 bg-[var(--theme-card)] p-2 text-[11px] text-[var(--theme-text)]">
+                            <div className="font-semibold">{child.title}</div>
+                            <div className="mt-1 text-[var(--theme-muted)]">{child.id} · {child.status} · {child.assignee ?? 'unassigned'}</div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
 
                 <div className="grid gap-4 xl:grid-cols-[minmax(0,1.3fr)_minmax(320px,0.9fr)]">
                   <div className="space-y-4">

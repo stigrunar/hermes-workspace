@@ -21,6 +21,14 @@ const UpdateCardSchema = CreateCardSchema.partial().extend({
   id: z.string().trim().min(1),
 })
 
+const DIRECT_DONE_ERROR = 'Direct done status is not allowed from The Matrix. Complete it through the worker/kanban_complete path so evidence, handoff, and follow-up semantics are preserved.'
+
+function rejectDirectDone(status: unknown): Response | null {
+  return status === 'done'
+    ? json({ ok: false, error: DIRECT_DONE_ERROR }, { status: 409 })
+    : null
+}
+
 export const Route = createFileRoute('/api/swarm-kanban' as never)({
   server: {
     handlers: {
@@ -56,6 +64,8 @@ export const Route = createFileRoute('/api/swarm-kanban' as never)({
         if (!parsed.success) {
           return json({ ok: false, error: parsed.error.issues.map((issue) => issue.message).join('; ') }, { status: 400 })
         }
+        const directDoneResponse = rejectDirectDone(parsed.data.status)
+        if (directDoneResponse) return directDoneResponse
         const card = await createKanbanCard({
           title: parsed.data.title,
           spec: parsed.data.spec,
@@ -88,6 +98,8 @@ export const Route = createFileRoute('/api/swarm-kanban' as never)({
         if (!parsed.success) {
           return json({ ok: false, error: parsed.error.issues.map((issue) => issue.message).join('; ') }, { status: 400 })
         }
+        const directDoneResponse = rejectDirectDone(parsed.data.status)
+        if (directDoneResponse) return directDoneResponse
         const { id, ...updates } = parsed.data
         const card = await updateKanbanCard(id, {
           title: updates.title,

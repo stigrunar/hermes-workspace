@@ -115,13 +115,14 @@ describe('/api/swarm-kanban auth boundary', () => {
           boardSlug: 'mission-control',
           boardLabel: 'The Matrix',
           boardSource: 'dashboard',
+          doneAudit: null,
         },
       ],
       backend: { id: 'hermes-proxy', label: 'Hermes Dashboard', detected: true, writable: true },
       boards: [{ slug: 'mission-control', label: 'The Matrix', description: null, available: true, current: true, source: 'dashboard' }],
       selectedBoard: { requested: 'matrix', slug: 'mission-control', label: 'The Matrix', description: null, fallback: false },
       readOnly: true,
-      taskDetail: { id: 't_demo', board: 'mission-control', title: 'Demo', status: 'ready', lane: 'ready', assignee: null, createdBy: 'tester', body: '', result: null, workspaceKind: null, workspacePath: '/tmp/work', currentRunId: null, createdAt: 1, startedAt: null, completedAt: null, comments: [], recentRuns: [] },
+      taskDetail: { id: 't_demo', board: 'mission-control', title: 'Demo', status: 'ready', lane: 'ready', assignee: null, createdBy: 'tester', body: '', result: null, workspaceKind: null, workspacePath: '/tmp/work', currentRunId: null, createdAt: 1, startedAt: null, completedAt: null, comments: [], recentRuns: [], doneAudit: null },
     })
 
     const res = await handlers.GET({
@@ -138,5 +139,37 @@ describe('/api/swarm-kanban auth boundary', () => {
       cards: [{ id: 't_demo', title: 'Demo', status: 'ready' }],
       taskDetail: { id: 't_demo', workspacePath: '/tmp/work' },
     })
+  })
+
+  it('rejects direct POST to done so Matrix cannot bypass worker completion evidence', async () => {
+    vi.mocked(isAuthenticated).mockReturnValue(true)
+
+    const res = await handlers.POST({
+      request: new Request('http://localhost/api/swarm-kanban', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: 'Done shortcut', status: 'done' }),
+      }),
+    })
+
+    expect(res.status).toBe(409)
+    expect(await res.json()).toMatchObject({ ok: false, error: expect.stringContaining('Direct done status is not allowed') })
+    expect(createKanbanCard).not.toHaveBeenCalled()
+  })
+
+  it('rejects direct PATCH to done so Matrix cannot bypass worker completion evidence', async () => {
+    vi.mocked(isAuthenticated).mockReturnValue(true)
+
+    const res = await handlers.PATCH({
+      request: new Request('http://localhost/api/swarm-kanban', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: 't_demo', status: 'done' }),
+      }),
+    })
+
+    expect(res.status).toBe(409)
+    expect(await res.json()).toMatchObject({ ok: false, error: expect.stringContaining('worker/kanban_complete') })
+    expect(updateKanbanCard).not.toHaveBeenCalled()
   })
 })

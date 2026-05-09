@@ -4,18 +4,21 @@ import * as path from 'node:path'
 import { MATRIX_DEFAULT_BOARD_SLUG } from '../lib/matrix-branding'
 import { getClaudeRoot } from './claude-paths'
 import {
-  type DashboardKanbanBoard,
+  
   fetchDashboardKanbanBoard,
   fetchDashboardKanbanTask,
-  listDashboardKanbanBoards,
+  listDashboardKanbanBoards
 } from './kanban-dashboard-proxy'
 import { getCapabilities } from './gateway-capabilities'
-import { getKanbanBackendMeta, type KanbanBackendMeta } from './kanban-backend'
+import {  getKanbanBackendMeta } from './kanban-backend'
 import {
-  type SwarmKanbanCard,
-  listSwarmKanbanCards,
   SWARM_KANBAN_FILE,
+  
+  listSwarmKanbanCards
 } from './swarm-kanban-store'
+import type {KanbanBackendMeta} from './kanban-backend';
+import type {SwarmKanbanCard} from './swarm-kanban-store';
+import type {DashboardKanbanBoard} from './kanban-dashboard-proxy';
 
 export type SwarmKanbanBoardOption = {
   slug: string
@@ -40,7 +43,24 @@ export type SwarmKanbanCardBoardMeta = {
   boardSource: SwarmKanbanBoardOption['source']
 }
 
-export type SwarmKanbanCardWithBoard = SwarmKanbanCard & SwarmKanbanCardBoardMeta
+export type SwarmKanbanOpenChild = {
+  id: string
+  title: string
+  status: string
+  assignee: string | null
+}
+
+export type SwarmKanbanDoneAudit = {
+  openChildCount: number
+  openChildren: Array<SwarmKanbanOpenChild>
+  completedEventCount: number
+  completedRunCount: number
+  warnings: Array<string>
+}
+
+export type SwarmKanbanCardWithBoard = SwarmKanbanCard & SwarmKanbanCardBoardMeta & {
+  doneAudit: SwarmKanbanDoneAudit | null
+}
 
 export type SwarmKanbanTaskComment = {
   author: string | null
@@ -77,6 +97,7 @@ export type SwarmKanbanTaskDetail = {
   completedAt: number | null
   comments: Array<SwarmKanbanTaskComment>
   recentRuns: Array<SwarmKanbanTaskRun>
+  doneAudit: SwarmKanbanDoneAudit | null
 }
 
 type SqliteTaskRow = {
@@ -110,6 +131,14 @@ type SqliteRunRow = {
   error?: string | null
   started_at?: number | string | null
   ended_at?: number | string | null
+}
+
+type SqliteDoneAuditRow = {
+  task_id: string
+  open_children?: string | null
+  open_child_count?: number | string | null
+  completed_event_count?: number | string | null
+  completed_run_count?: number | string | null
 }
 
 type ResolvedBoard = SwarmKanbanSelectedBoard & {
@@ -216,12 +245,91 @@ function sqliteTaskToCard(task: SqliteTaskRow): SwarmKanbanCard {
   }
 }
 
-function withBoardMeta(card: SwarmKanbanCard, board: Pick<SwarmKanbanBoardOption, 'slug' | 'label' | 'source'>): SwarmKanbanCardWithBoard {
+function toCount(value: number | string | null | undefined): number {
+  const numeric = typeof value === 'number' ? value : Number(value ?? 0)
+  return Number.isFinite(numeric) ? numeric : 0
+}
+
+function parseOpenChildren(value: string | null | undefined): Array<SwarmKanbanOpenChild> {
+  if (!value) return []
+  return value
+    .split('\u001e')
+    .filter(Boolean)
+    .map((entry) => {
+      const [id = '', title = '', status = '', assignee = ''] = entry.split('\u001f')
+      return {
+        id,
+        title,
+        status,
+        assignee: assignee || null,
+      }
+    })
+}
+
+function doneAuditFromRow(row: SqliteDoneAuditRow | undefined): SwarmKanbanDoneAudit | null {
+  if (!row) return null
+  const openChildren = parseOpenChildren(row.open_children)
+  const openChildCount = toCount(row.open_child_count) || openChildren.length
+  const completedEventCount = toCount(row.completed_event_count)
+  const completedRunCount = toCount(row.completed_run_count)
+  const warnings: Array<string> = []
+  if (openChildCount > 0) {
+    warnings.push(`Slice done; ${openChildCount} linked follow-up task${openChildCount === 1 ? '' : 's'} still open/blocked.`)
+  }
+  if (completedEventCount === 0 && completedRunCount === 0) {
+    warnings.push('Done has no completed run/event evidence exposed by the canonical Kanban DB.')
+  }
+  return {
+    openChildCount,
+    openChildren,
+    completedEventCount,
+    completedRunCount,
+    warnings,
+  }
+}
+
+function doneAuditSql(whereClause: string): string {
+  return [
+    'select p.id as task_id,',
+    "coalesce(group_concat(c.id || char(31) || replace(coalesce(c.title, ''), char(30), ' ') || char(31) || coalesce(c.status, '') || char(31) || coalesce(c.assignee, ''), char(30)), '') as open_children,",
+    'count(c.id) as open_child_count,',
+    "(select count(*) from task_events e where e.task_id = p.id and e.kind = 'completed') as completed_event_count,",
+    "(select count(*) from task_runs r where r.task_id = p.id and (r.status in ('completed','done','success') or r.outcome in ('completed','done','success'))) as completed_run_count",
+    'from tasks p',
+    'left join task_links l on l.parent_id = p.id',
+    "left join tasks c on c.id = l.child_id and c.status not in ('done', 'archived')",
+    whereClause,
+    'group by p.id;',
+  ].join(' ')
+}
+
+function doneAuditForTask(dbPath: string, taskId: string, status: string | null | undefined): SwarmKanbanDoneAudit | null {
+  if ((status ?? '').toLowerCase() !== 'done') return null
+  const safeTaskId = taskId.replace(/'/g, "''")
+  const rows = sqliteJson<Array<SqliteDoneAuditRow>>(dbPath, doneAuditSql(`where p.id = '${safeTaskId}' and p.status = 'done'`))
+  return doneAuditFromRow(rows[0])
+}
+
+function doneAuditMapForBoard(dbPath: string): Map<string, SwarmKanbanDoneAudit> {
+  const rows = sqliteJson<Array<SqliteDoneAuditRow>>(dbPath, doneAuditSql("where p.status = 'done'"))
+  return new Map(
+    rows
+      .map((row) => [row.task_id, doneAuditFromRow(row)] as const)
+      .filter((entry): entry is readonly [string, SwarmKanbanDoneAudit] => Boolean(entry[1])),
+  )
+}
+
+function withBoardMeta(
+  card: SwarmKanbanCard,
+  board: Pick<SwarmKanbanBoardOption, 'slug' | 'label' | 'source'>,
+  doneAudit: SwarmKanbanDoneAudit | null = null,
+): SwarmKanbanCardWithBoard {
   return {
     ...card,
     boardSlug: board.slug,
     boardLabel: board.label,
     boardSource: board.source,
+    doneAudit,
   }
 }
 
@@ -350,7 +458,8 @@ async function cardsForBoard(board: SwarmKanbanBoardOption): Promise<Array<Swarm
         'order by coalesce(completed_at, started_at, created_at) desc, id desc;',
       ].join(' '),
     )
-    return rows.map((row) => withBoardMeta(sqliteTaskToCard(row), board))
+    const doneAudits = doneAuditMapForBoard(dbPath)
+    return rows.map((row) => withBoardMeta(sqliteTaskToCard(row), board, doneAudits.get(row.id) ?? null))
   }
 
   return listSwarmKanbanCards().map((card) => withBoardMeta(card, board))
@@ -432,6 +541,7 @@ export async function getSwarmKanbanTaskDetail(input: {
       completedAt: normalizeTimestamp(task.completed_at),
       comments: [],
       recentRuns: [],
+      doneAudit: null,
     }
   }
 
@@ -445,8 +555,8 @@ export async function getSwarmKanbanTaskDetail(input: {
         'limit 1;',
       ].join(' '),
     )
+    if (taskRows.length === 0) return null
     const task = taskRows[0]
-    if (!task) return null
     const comments = sqliteJson<Array<SqliteCommentRow>>(
       resolved.dbPath,
       [
@@ -467,6 +577,7 @@ export async function getSwarmKanbanTaskDetail(input: {
         'limit 5;',
       ].join(' '),
     )
+    const doneAudit = doneAuditForTask(resolved.dbPath, task.id, task.status)
     return {
       id: task.id,
       board: resolved.slug,
@@ -498,6 +609,7 @@ export async function getSwarmKanbanTaskDetail(input: {
         startedAt: normalizeTimestamp(run.started_at),
         endedAt: normalizeTimestamp(run.ended_at),
       })),
+      doneAudit,
     }
   }
 
@@ -521,5 +633,6 @@ export async function getSwarmKanbanTaskDetail(input: {
     completedAt: null,
     comments: [],
     recentRuns: [],
+    doneAudit: null,
   }
 }
