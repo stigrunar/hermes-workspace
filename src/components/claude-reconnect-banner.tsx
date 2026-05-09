@@ -17,7 +17,13 @@ async function probeClaudeHealth(): Promise<boolean> {
       cache: 'no-store',
     })
     if (response.ok) return true
-  } catch {
+    if (response.status === 401) {
+      throw new Error('Workspace session expired / log in again')
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('Workspace session expired')) {
+      throw error
+    }
     /* fall through */
   }
   // Fallback to direct health proxy
@@ -156,7 +162,12 @@ export function ClaudeReconnectBanner({
             wasDisconnectedRef.current = true
             setBannerState('disconnected')
             setMessage(
-              error instanceof Error ? error.message : 'Connection failed',
+              error instanceof Error &&
+                error.message === 'Workspace session expired / log in again'
+                ? error.message
+                : error instanceof Error
+                  ? error.message
+                  : 'Connection failed',
             )
           }
           return false
