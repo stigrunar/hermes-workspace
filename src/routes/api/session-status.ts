@@ -38,7 +38,10 @@ export const Route = createFileRoute('/api/session-status')({
             })
           }
           const url = new URL(request.url)
-          const requestedKey = url.searchParams.get('sessionKey')?.trim() || ''
+          const requestedKey =
+            url.searchParams.get('sessionKey')?.trim() ||
+            url.searchParams.get('key')?.trim() ||
+            ''
           let sessionKey = requestedKey || 'new'
 
           if (sessionKey === 'new') {
@@ -80,9 +83,20 @@ export const Route = createFileRoute('/api/session-status')({
           }
 
           const session = await getSession(sessionKey)
-          const config = capabilities.config
-            ? await getConfig()
-            : ({ model: '', provider: '' } as const)
+          let config: { model?: string; provider?: string } = { model: '', provider: '' }
+          if (capabilities.config) {
+            try {
+              config = await getConfig()
+            } catch (error) {
+              // Some Hermes API/dashboard combinations advertise config capability
+              // while /api/config is not actually exposed. Session status should
+              // degrade to session-local model metadata instead of spamming 503.
+              console.warn(
+                '[session-status] config unavailable; continuing without global model config',
+                error instanceof Error ? error.message : error,
+              )
+            }
+          }
 
           const inputTokens = session.input_tokens ?? 0
           const outputTokens = session.output_tokens ?? 0
