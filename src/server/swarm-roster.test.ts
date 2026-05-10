@@ -19,8 +19,13 @@ describe('swarm identity helpers', () => {
   })
 
   it('provides clearer fallback names and actual roles for dolly profiles', () => {
-    expect(fallbackDisplayName('dolly')).toBe('Dolly Main')
+    expect(fallbackDisplayName('default')).toBe('Dolly Main')
+    expect(fallbackDisplayName('dolly')).toBe('Dolly Legacy')
     expect(fallbackDisplayName('dollyops')).toBe('DollyOps')
+    expect(fallbackDisplayName('dollyqa')).toBe('DollyQA')
+    expect(fallbackDisplayName('dollyresearch')).toBe('DollyResearch')
+    expect(fallbackRoleForWorker('default')).toBe('controller')
+    expect(fallbackRoleForWorker('dolly')).toBe('legacy/stopped')
     expect(fallbackRoleForWorker('dollydesign')).toBe('design')
     expect(fallbackRoleForWorker('dollyprivate')).toBe('private')
   })

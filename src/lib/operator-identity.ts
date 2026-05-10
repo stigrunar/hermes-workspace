@@ -7,12 +7,14 @@ function titleCaseSlug(value: string): string {
 }
 
 const OPERATOR_DISPLAY_NAME_MAP: Record<string, string> = {
-  default: 'Workspace',
-  dolly: 'Dolly Main',
+  default: 'Dolly Main',
+  dolly: 'Dolly Legacy',
   dollycode: 'DollyCode',
   dollydesign: 'DollyDesign',
   dollyops: 'DollyOps',
   dollyprivate: 'DollyPrivate',
+  dollyqa: 'DollyQA',
+  dollyresearch: 'DollyResearch',
 }
 
 export function fallbackOperatorDisplayName(id: string): string {

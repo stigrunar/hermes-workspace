@@ -7,7 +7,11 @@ import * as yaml from 'yaml'
 import { isAuthenticated } from '../../server/auth-middleware'
 import { BEARER_TOKEN, CLAUDE_API, ensureGatewayProbed } from '../../server/gateway-capabilities'
 import { getClaudeRoot, getProfileClaudeHome, getWorkspaceClaudeHome } from '../../server/claude-paths'
-import { readSwarmRoster } from '../../server/swarm-roster'
+import {
+  fallbackDisplayName,
+  fallbackRoleForWorker,
+  readSwarmRoster,
+} from '../../server/swarm-roster'
 
 type CrewDefinition = {
   id: string
@@ -38,6 +42,10 @@ function titleCase(value: string): string {
     .join(' ')
 }
 
+function displayNameForProfile(profile: string): string {
+  return fallbackDisplayName(profile) || titleCase(profile)
+}
+
 function buildCrewDefinitions(): Array<CrewDefinition> {
   const profilesDir = join(getClaudeRoot(), 'profiles')
   const rosterById = new Map(
@@ -56,17 +64,23 @@ function buildCrewDefinitions(): Array<CrewDefinition> {
           }
         })
         .map((entry) => entry.name)
+        .filter((profile) => profile !== 'workspace')
         .sort()
     : []
 
   return [
-    { id: 'workspace', displayName: 'Workspace', role: 'Primary profile', profilePath: null },
+    {
+      id: 'default',
+      displayName: 'Dolly Main',
+      role: 'Root/default controller',
+      profilePath: null,
+    },
     ...dynamicProfiles.map((profile) => {
       const rosterWorker = rosterById.get(profile)
       return {
         id: profile,
-        displayName: rosterWorker?.name.trim() || titleCase(profile),
-        role: rosterWorker?.role.trim() || 'Profile',
+        displayName: rosterWorker?.name.trim() || displayNameForProfile(profile),
+        role: rosterWorker?.role.trim() || fallbackRoleForWorker(profile),
         specialty: rosterWorker?.specialty.trim() || undefined,
         mission: rosterWorker?.mission.trim() || undefined,
         skills: rosterWorker?.skills.length ? rosterWorker.skills : undefined,

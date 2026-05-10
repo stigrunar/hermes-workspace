@@ -73,11 +73,14 @@ export function fallbackDisplayName(id: string): string {
 export function fallbackRoleForWorker(id: string): string {
   const normalized = id.toLowerCase()
   const map: Record<string, string> = {
-    dolly: 'controller',
+    default: 'controller',
+    dolly: 'legacy/stopped',
     dollycode: 'implementation',
     dollydesign: 'design',
     dollyops: 'ops',
     dollyprivate: 'private',
+    dollyqa: 'qa',
+    dollyresearch: 'research',
   }
   return map[normalized] || defaultRoleFromId(id)
 }
