@@ -546,6 +546,12 @@ const config = defineConfig(({ mode, command }) => {
         },
       },
     },
+    preview: {
+      // Keep the built-runtime smoke path aligned with the dev/default URL.
+      host: '0.0.0.0',
+      port: process.env.PORT ? Number(process.env.PORT) : 3000,
+      strictPort: false,
+    },
     plugins: [
       // devtools(),
       // this is the plugin that enables path aliases

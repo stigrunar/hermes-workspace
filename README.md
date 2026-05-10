@@ -106,6 +106,8 @@ cd ~/hermes-workspace && pnpm dev   # terminal 2
 
 Open http://localhost:3000. That's it.
 
+Need a built-runtime smoke or restart check instead of live dev mode? Run `pnpm build && pnpm start` to serve the compiled app on the same default URL (`PORT=4000 pnpm start` overrides it).
+
 ---
 
 ### Already running `hermes-agent`? Attach the workspace to it
@@ -128,6 +130,8 @@ echo 'HERMES_DASHBOARD_URL=http://127.0.0.1:9119' >> .env
 
 pnpm dev                            # http://localhost:3000 (override with PORT=4000 pnpm dev)
 ```
+
+For a local built-artifact restart check, use `pnpm build && pnpm start` (same default port/override behavior as dev).
 
 Requirements on the agent side:
 
@@ -237,6 +241,8 @@ pnpm dev                   # Starts on http://localhost:3000
 ```
 
 > **Verify:** Open `http://localhost:3000` and complete the onboarding flow. First connect the backend, then verify chat works. If your gateway exposes Hermes Agent APIs, advanced features appear automatically.
+
+> Built-runtime smoke path: `pnpm build && pnpm start` serves the compiled app on the same default port (`PORT=4000 pnpm start` to override).
 
 #### Environment Variables
 
