@@ -11,6 +11,13 @@ import { createOrUpdateMission, markMissionAssignmentDispatched, recordMissionCh
 import { appendSwarmMemoryEvent, buildSwarmStartupSnapshot } from '../../server/swarm-memory'
 import { rosterByWorkerId, type SwarmRosterWorker } from '../../server/swarm-roster'
 import { publishSwarmCheckpointNotification } from '../../server/swarm-notifications'
+import {
+  appendCanonicalComment,
+  appendCanonicalEvent,
+  createMutationId,
+  findTaskAcceptance,
+  loadCanonicalTask,
+} from '../../server/swarm-kanban-canonical'
 
 const HERMES_BIN_CANDIDATES = [
   process.env.HERMES_CLI_BIN,
@@ -52,6 +59,10 @@ type DispatchRequest = {
   missionTitle?: unknown
   direct?: unknown
   notifySessionKey?: unknown
+  taskId?: unknown
+  board?: unknown
+  reason?: unknown
+  acceptance?: unknown
 }
 
 type WorkerResult = {
@@ -942,7 +953,51 @@ function runWorker(assignment: AssignmentRequest, timeoutMs: number, roster: Swa
   })
 }
 
-export const Route = createFileRoute('/api/swarm-dispatch')({
+function parseTaskId(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
+function parseBoard(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
+function parseReason(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
+function taskPromptFromCanonicalTask(task: { title: string; body?: string | null }): string {
+  const body = task.body?.trim() ?? ''
+  return body ? `${task.title}\n\n${body}` : task.title
+}
+
+function canonicalTaskHasUsableScope(task: { title?: string | null; body?: string | null }): boolean {
+  return taskPromptFromCanonicalTask({ title: task.title?.trim() ?? '', body: task.body }).trim().length > 0
+}
+
+function canonicalTaskHasClaimEvidence(task: {
+  status?: string | null
+  started_at?: number | string | null
+  current_run_id?: number | null
+}): boolean {
+  const status = task.status?.trim().toLowerCase()
+  return Boolean(task.current_run_id || task.started_at || status === 'running')
+}
+
+function dispatchLifecycleState(input: {
+  deliveryOk: boolean
+  task: {
+    status?: string | null
+    started_at?: number | string | null
+    current_run_id?: number | null
+  } | null
+  acceptanceRecorded: boolean
+}): 'queued' | 'claimed-spawned' | 'accepted' | 'failed' {
+  if (!input.deliveryOk) return 'failed'
+  if (!input.task || !canonicalTaskHasClaimEvidence(input.task)) return 'queued'
+  return input.acceptanceRecorded ? 'accepted' : 'claimed-spawned'
+}
+
+export const Route = createFileRoute('/api/swarm-dispatch' as never)({
   server: {
     handlers: {
       POST: async ({ request }) => {
@@ -960,7 +1015,60 @@ export const Route = createFileRoute('/api/swarm-dispatch')({
         let assignments = parseAssignments(body.assignments)
         const promptRaw = typeof body.prompt === 'string' ? body.prompt : ''
         const prompt = promptRaw.trim()
-        if (assignments.length === 0) {
+        const taskId = parseTaskId(body.taskId)
+        const board = parseBoard(body.board)
+        const dispatchReason = parseReason(body.reason)
+        const mutationId = createMutationId()
+        let dispatchReceipt: Record<string, unknown> | null = null
+
+        if (taskId) {
+          const canonical = loadCanonicalTask(taskId, board)
+          if (!canonical) {
+            return json({ error: 'Task not found for task-bound dispatch' }, { status: 404 })
+          }
+          if ((canonical.task.status ?? '').toLowerCase() !== 'ready') {
+            return json({ error: 'Task-bound dispatch requires canonical task status ready' }, { status: 409 })
+          }
+          const assignee = canonical.task.assignee?.trim()
+          if (!assignee || !validateWorkerId(assignee)) {
+            return json({ error: 'Task-bound dispatch requires a valid canonical assignee' }, { status: 409 })
+          }
+          if (!canonicalTaskHasUsableScope(canonical.task)) {
+            return json({ error: 'Task-bound dispatch requires canonical task title/body scope' }, { status: 409 })
+          }
+          const workerIdsRaw = Array.isArray(body.workerIds) ? body.workerIds : []
+          const workerIds = workerIdsRaw
+            .filter((value): value is string => typeof value === 'string')
+            .map((value) => value.trim())
+            .filter((value) => value.length > 0)
+          if (workerIds.length > 1 || (workerIds[0] && workerIds[0] !== assignee)) {
+            return json({ error: 'Task-bound dispatch worker must match the canonical assignee' }, { status: 409 })
+          }
+          assignments = [{
+            workerId: assignee,
+            task: prompt || taskPromptFromCanonicalTask({ title: canonical.task.title, body: canonical.task.body }),
+            rationale: dispatchReason ?? `Task-bound dispatch for ${taskId}`,
+            direct: body.direct === true,
+          }]
+          appendCanonicalComment({
+            dbPath: canonical.dbPath,
+            taskId,
+            author: 'matrix-dispatch',
+            body: `[Matrix dispatch] requested worker=${assignee} mutation=${mutationId}${dispatchReason ? ` | reason: ${dispatchReason}` : ''}`,
+          })
+          appendCanonicalEvent({
+            dbPath: canonical.dbPath,
+            taskId,
+            kind: 'matrix_dispatch_requested',
+            payload: {
+              mutationId,
+              taskId,
+              board: board ?? null,
+              workerId: assignee,
+              reason: dispatchReason ?? null,
+            },
+          })
+        } else if (assignments.length === 0) {
           const workerIdsRaw = Array.isArray(body.workerIds) ? body.workerIds : []
           const workerIds = workerIdsRaw
             .filter((value): value is string => typeof value === 'string')
@@ -969,8 +1077,14 @@ export const Route = createFileRoute('/api/swarm-dispatch')({
           assignments = workerIds.map((workerId) => ({ workerId, task: prompt, rationale: 'Legacy broadcast dispatch.', direct: body.direct === true }))
         }
 
+        if (taskId && assignments.length === 0) {
+          return json({ error: 'Task-bound dispatch requires taskId + assignee-backed assignment' }, { status: 400 })
+        }
+        if (!taskId && (board || body.reason !== undefined || body.acceptance !== undefined)) {
+          return json({ error: 'dispatch without taskId fails' }, { status: 400 })
+        }
         if (assignments.length === 0) {
-          return json({ error: 'assignments[] or workerIds[] required' }, { status: 400 })
+          return json({ error: taskId ? 'dispatch without taskId fails' : 'assignments[] or workerIds[] required' }, { status: 400 })
         }
         if (assignments.length > 12) {
           return json({ error: 'Maximum 12 workers per dispatch' }, { status: 400 })
@@ -985,11 +1099,6 @@ export const Route = createFileRoute('/api/swarm-dispatch')({
         const timeoutRaw = typeof body.timeoutSeconds === 'number' ? body.timeoutSeconds : DEFAULT_TIMEOUT_S
         const timeoutSeconds = Math.max(10, Math.min(MAX_TIMEOUT_S, Math.floor(timeoutRaw)))
         const timeoutMs = timeoutSeconds * 1000
-        // Swarm2 control-plane dispatches should be observable by default:
-        // wait for a fresh checkpoint so completion/blocker notifications can
-        // be published and worker progress cards can resolve. Callers that
-        // intentionally want fire-and-forget delivery must opt out with both
-        // waitForCheckpoint:false and allowAsync:true.
         const waitForCheckpoint = !(body.waitForCheckpoint === false && body.allowAsync === true)
         const pollRaw = typeof body.checkpointPollSeconds === 'number' ? body.checkpointPollSeconds : 90
         const checkpointPollSeconds = Math.max(5, Math.min(300, Math.floor(pollRaw)))
@@ -999,7 +1108,7 @@ export const Route = createFileRoute('/api/swarm-dispatch')({
         const hasExplicitMissionTitle = typeof body.missionTitle === 'string' && body.missionTitle.trim()
         const missionTitle = hasExplicitMissionTitle
           ? (body.missionTitle as string).trim()
-          : requestedMissionId ? '' : assignments.length === 1 ? assignments[0].task.slice(0, 120) : `${assignments.length} assigned tasks` 
+          : requestedMissionId ? '' : assignments.length === 1 ? assignments[0].task.slice(0, 120) : `${assignments.length} assigned tasks`
         const mission = createOrUpdateMission({
           missionId: requestedMissionId || null,
           title: missionTitle,
@@ -1035,6 +1144,61 @@ export const Route = createFileRoute('/api/swarm-dispatch')({
           { waitForCheckpoint, checkpointPollMs: checkpointPollSeconds * 1000, missionId: mission.id, notifySessionKey },
         )))
 
+        if (taskId) {
+          const canonicalAfterDispatch = loadCanonicalTask(taskId, board)
+          const assignment = assignments[0]
+          const result = results[0]
+          const acceptanceRecorded = Boolean(findTaskAcceptance(taskId, board))
+          const receiptState = dispatchLifecycleState({
+            deliveryOk: Boolean(result?.ok),
+            task: canonicalAfterDispatch?.task ?? null,
+            acceptanceRecorded,
+          })
+          if (canonicalAfterDispatch && assignment && result) {
+            appendCanonicalComment({
+              dbPath: canonicalAfterDispatch.dbPath,
+              taskId,
+              author: 'matrix-dispatch',
+              body: `[Matrix dispatch] mission=${mission.id} assignment=${assignment.assignmentId ?? 'unknown'} worker=${assignment.workerId} delivery=${result.delivery ?? 'unknown'} state=${receiptState} ok=${result.ok ? 'yes' : 'no'} mutation=${mutationId}`,
+            })
+            appendCanonicalEvent({
+              dbPath: canonicalAfterDispatch.dbPath,
+              taskId,
+              kind: 'matrix_dispatch_receipt',
+              payload: {
+                mutationId,
+                taskId,
+                missionId: mission.id,
+                assignmentId: assignment.assignmentId ?? null,
+                workerId: assignment.workerId,
+                delivery: result.delivery ?? null,
+                ok: result.ok,
+                state: receiptState,
+                acceptancePending: receiptState === 'claimed-spawned',
+                checkpointStatus: result.checkpointStatus ?? null,
+                stateAfter: canonicalAfterDispatch.task.status ?? null,
+                waitForCheckpoint,
+                error: result.error ?? null,
+                reason: dispatchReason ?? null,
+              },
+            })
+          }
+          dispatchReceipt = {
+            mutationId,
+            taskId,
+            missionId: mission.id,
+            assignmentId: assignment?.assignmentId ?? null,
+            workerId: assignment?.workerId ?? null,
+            delivery: result?.delivery ?? 'queued',
+            state: receiptState,
+            acceptancePending: receiptState === 'claimed-spawned',
+            waitForCheckpoint,
+            checkpointStatus: result?.checkpointStatus ?? null,
+            stateAfter: canonicalAfterDispatch?.task.status ?? null,
+            acceptanceRecorded,
+          }
+        }
+
         return json({
           dispatchedAt,
           completedAt: Date.now(),
@@ -1047,6 +1211,7 @@ export const Route = createFileRoute('/api/swarm-dispatch')({
           checkpointPollSeconds,
           notifySessionKey,
           results,
+          receipt: dispatchReceipt,
         })
       },
     },

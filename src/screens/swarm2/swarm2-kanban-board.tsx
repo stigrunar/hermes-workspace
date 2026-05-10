@@ -75,6 +75,30 @@ type KanbanTaskRun = {
   endedAt: number | null
 }
 
+type KanbanTaskAcceptance = Partial<Record<
+  'accepted_by' | 'accepted_at' | 'lane' | 'scope_understood' | 'first_action' | 'expected_artifact' | 'risk_level' | 'will_not_do',
+  string
+>>
+
+type KanbanControlReceipt = {
+  kind: 'matrix_control' | 'matrix_dispatch_receipt'
+  createdAt: number | null
+  mutationId: string | null
+  actor: string | null
+  reason: string | null
+  action: string | null
+  detail: string | null
+  taskId: string | null
+  missionId: string | null
+  assignmentId: string | null
+  workerId: string | null
+  delivery: string | null
+  ok: boolean | null
+  checkpointStatus: string | null
+  stateAfter: string | null
+  error: string | null
+}
+
 type KanbanOpenChild = {
   id: string
   title: string
@@ -108,6 +132,8 @@ type KanbanTaskDetail = {
   completedAt: number | null
   comments: Array<KanbanTaskComment>
   recentRuns: Array<KanbanTaskRun>
+  acceptance: KanbanTaskAcceptance | null
+  controlReceipts: Array<KanbanControlReceipt>
   doneAudit: KanbanDoneAudit | null
 }
 
@@ -228,6 +254,113 @@ function doneAuditLacksEvidence(audit: KanbanDoneAudit | null | undefined): bool
   return Boolean(audit?.warnings.length) && audit?.completedEventCount === 0 && audit.completedRunCount === 0
 }
 
+const ACCEPTANCE_FIELDS = [
+  'accepted_by',
+  'accepted_at',
+  'lane',
+  'scope_understood',
+  'first_action',
+  'expected_artifact',
+  'risk_level',
+  'will_not_do',
+] as const
+
+export function getAcceptanceMissingFields(acceptance: KanbanTaskAcceptance | null | undefined): Array<string> {
+  return ACCEPTANCE_FIELDS.filter((field) => !acceptance?.[field]?.trim())
+}
+
+function latestDispatchReceipt(receipts: Array<KanbanControlReceipt> | null | undefined): KanbanControlReceipt | null {
+  return receipts?.find((receipt) => receipt.kind === 'matrix_dispatch_receipt') ?? null
+}
+
+function latestMatrixControlReceipt(receipts: Array<KanbanControlReceipt> | null | undefined): KanbanControlReceipt | null {
+  return receipts?.find((receipt) => receipt.kind === 'matrix_control') ?? null
+}
+
+export function taskHasClaimEvidence(detail: KanbanTaskDetail | null | undefined): boolean {
+  if (!detail) return false
+  return Boolean(detail.currentRunId || detail.startedAt || detail.lane === 'running' || detail.status.toLowerCase() === 'claimed')
+}
+
+function taskHasUsableScope(detail: KanbanTaskDetail | null | undefined): boolean {
+  if (!detail) return false
+  return `${detail.title}\n${detail.body}`.trim().length > 0
+}
+
+type KanbanControlState = {
+  label: string
+  tone: string
+  note: string | null
+}
+
+export function getKanbanControlState(detail: KanbanTaskDetail | null): KanbanControlState {
+  if (!detail) {
+    return {
+      label: 'Loading canonical state',
+      tone: 'border-[var(--theme-border)] bg-[var(--theme-bg)] text-[var(--theme-muted)]',
+      note: null,
+    }
+  }
+  const dispatch = latestDispatchReceipt(detail.controlReceipts)
+  const acceptanceMissing = getAcceptanceMissingFields(detail.acceptance)
+  if (detail.lane === 'done') {
+    return {
+      label: 'Done via worker',
+      tone: 'border-green-400/40 bg-green-500/10 text-green-700',
+      note: 'Completion remains worker-owned. Matrix only reads the canonical evidence here.',
+    }
+  }
+  if (dispatch?.ok === false) {
+    return {
+      label: 'Dispatch failed',
+      tone: 'border-red-400/40 bg-red-500/10 text-red-700',
+      note: dispatch.error ?? 'Canonical dispatch receipt recorded a failed delivery attempt.',
+    }
+  }
+  if (taskHasClaimEvidence(detail)) {
+    if (acceptanceMissing.length === 0) {
+      return {
+        label: 'Accepted / underway',
+        tone: 'border-emerald-400/40 bg-emerald-500/10 text-emerald-700',
+        note: 'Claim evidence exists and the specialist acceptance fields are complete.',
+      }
+    }
+    return {
+      label: 'Claimed-spawned · acceptance pending',
+      tone: 'border-amber-400/40 bg-amber-500/10 text-amber-700',
+      note: `Claim evidence exists, but acceptance is still missing: ${acceptanceMissing.join(', ')}`,
+    }
+  }
+  if (dispatch) {
+    return {
+      label: 'Dispatch queued',
+      tone: 'border-blue-400/40 bg-blue-500/10 text-blue-700',
+      note: dispatch.assignmentId
+        ? `Receipt ${dispatch.assignmentId} is recorded. Keep showing queued until canonical claim evidence appears.`
+        : 'Dispatch receipt is recorded. Keep showing queued until canonical claim evidence appears.',
+    }
+  }
+  if (detail.lane === 'blocked') {
+    return {
+      label: 'Blocked',
+      tone: 'border-red-400/40 bg-red-500/10 text-red-700',
+      note: latestMatrixControlReceipt(detail.controlReceipts)?.reason ?? 'This task is blocked in canonical storage.',
+    }
+  }
+  if (detail.lane === 'ready') {
+    return {
+      label: 'Ready',
+      tone: 'border-blue-400/40 bg-blue-500/10 text-blue-700',
+      note: 'Ready is the highest Matrix-owned lane. Dispatch can be requested from here.',
+    }
+  }
+  return {
+    label: detail.status || 'Unknown',
+    tone: 'border-[var(--theme-border)] bg-[var(--theme-bg)] text-[var(--theme-muted)]',
+    note: null,
+  }
+}
+
 type KanbanBoardQuery = {
   cards: Array<SwarmKanbanCard>
   backend: KanbanBackendMeta | null
@@ -288,6 +421,20 @@ export function Swarm2KanbanBoard({
   const [requestedBoard, setRequestedBoard] = useState(ALL_BOARDS_SLUG)
   const [selectedTask, setSelectedTask] = useState<SelectedKanbanTask | null>(null)
   const [backendToast, setBackendToast] = useState<KanbanBackendPresentation | null>(null)
+  const [createTitle, setCreateTitle] = useState('')
+  const [createBody, setCreateBody] = useState('')
+  const [createAssignee, setCreateAssignee] = useState('')
+  const [editTitle, setEditTitle] = useState('')
+  const [editBody, setEditBody] = useState('')
+  const [assignWorkerId, setAssignWorkerId] = useState('')
+  const [routingComment, setRoutingComment] = useState('')
+  const [actionReason, setActionReason] = useState('')
+  const [dispatchReason, setDispatchReason] = useState('')
+  const [reassignWorkerId, setReassignWorkerId] = useState('')
+  const [reassignReason, setReassignReason] = useState('')
+  const [reclaimReason, setReclaimReason] = useState('')
+  const [feedback, setFeedback] = useState<{ tone: 'error' | 'success'; message: string } | null>(null)
+  const [pendingAction, setPendingAction] = useState<string | null>(null)
   const lastToastedBackendKey = useRef<string | null>(null)
 
   const query = useQuery({
@@ -344,6 +491,96 @@ export function Swarm2KanbanBoard({
   const doneWithFollowUpCount = (cardsByLane.get('done') ?? []).filter((card) => (card.doneAudit?.openChildCount ?? 0) > 0).length
   const doneMissingEvidenceCount = (cardsByLane.get('done') ?? []).filter((card) => doneAuditLacksEvidence(card.doneAudit)).length
   const detail = detailQuery.data ?? null
+  const acceptanceMissingFields = getAcceptanceMissingFields(detail?.acceptance)
+  const latestReceipt = latestDispatchReceipt(detail?.controlReceipts)
+  const controlState = getKanbanControlState(detail)
+  const mutableBoard = (selectedBoard?.slug ?? requestedBoard) === ALL_BOARDS_SLUG ? MATRIX_DEFAULT_BOARD_SLUG : (selectedBoard?.slug ?? requestedBoard)
+  const claimEvidence = taskHasClaimEvidence(detail)
+  const canEditTask = !readOnly && Boolean(detail) && detail.lane !== 'done'
+  const canAssignWorker = canEditTask && !claimEvidence
+  const canMarkReady = canEditTask && !claimEvidence && detail?.lane !== 'ready'
+  const canMarkBlocked = canEditTask && detail?.lane !== 'blocked'
+  const canDispatch = !readOnly && Boolean(detail) && detail?.lane === 'ready' && !claimEvidence && Boolean(detail?.assignee?.trim()) && taskHasUsableScope(detail)
+  const canReclaim = !readOnly && Boolean(detail) && !claimEvidence
+
+  useEffect(() => {
+    if (!detail) return
+    setEditTitle(detail.title)
+    setEditBody(detail.body)
+    setAssignWorkerId(detail.assignee ?? '')
+    setReassignWorkerId(detail.assignee ?? '')
+  }, [detail?.id, detail?.title, detail?.body, detail?.assignee])
+
+  async function refreshBoard(taskOverride?: SelectedKanbanTask | null) {
+    await query.refetch()
+    if (taskOverride ?? selectedTask) {
+      await detailQuery.refetch()
+    }
+  }
+
+  async function runControlAction(payload: Record<string, unknown>, successMessage: string, taskOverride?: SelectedKanbanTask | null) {
+    setPendingAction(String(payload.action ?? 'control'))
+    setFeedback(null)
+    try {
+      const res = await fetch('/api/swarm-kanban-control', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      const json = await res.json().catch(() => ({})) as { ok?: boolean; error?: string; receipt?: { taskId?: string } }
+      if (!res.ok || !json.ok) {
+        throw new Error(json.error || `Control request failed: ${res.status}`)
+      }
+      if (payload.action === 'create_task' && json.receipt?.taskId) {
+        setCreateTitle('')
+        setCreateBody('')
+        setCreateAssignee('')
+        setSelectedTask({ id: json.receipt.taskId, boardSlug: mutableBoard, boardLabel: selectedBoard?.label ?? MATRIX_BOARD_LABEL })
+      }
+      if (payload.action === 'add_comment') setRoutingComment('')
+      if (payload.action === 'reassign_worker') setReassignReason('')
+      if (payload.action === 'reclaim_worker') setReclaimReason('')
+      if (payload.action === 'mark_ready' || payload.action === 'mark_blocked' || payload.action === 'assign_task' || payload.action === 'edit_task') {
+        setActionReason('')
+      }
+      await refreshBoard(taskOverride)
+      setFeedback({ tone: 'success', message: successMessage })
+    } catch (error) {
+      setFeedback({ tone: 'error', message: error instanceof Error ? error.message : 'Control request failed' })
+    } finally {
+      setPendingAction(null)
+    }
+  }
+
+  async function runDispatchRequest() {
+    if (!detail) return
+    setPendingAction('request_dispatch')
+    setFeedback(null)
+    try {
+      const res = await fetch('/api/swarm-dispatch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          taskId: detail.id,
+          board: detail.board,
+          reason: dispatchReason.trim() || undefined,
+          waitForCheckpoint: false,
+          allowAsync: true,
+        }),
+      })
+      const json = await res.json().catch(() => ({})) as { error?: string; receipt?: { missionId?: string | null } }
+      if (!res.ok) {
+        throw new Error(json.error || `Dispatch request failed: ${res.status}`)
+      }
+      await refreshBoard(selectedTask)
+      setDispatchReason('')
+      setFeedback({ tone: 'success', message: json.receipt?.missionId ? `Dispatch queued · ${json.receipt.missionId}` : 'Dispatch queued' })
+    } catch (error) {
+      setFeedback({ tone: 'error', message: error instanceof Error ? error.message : 'Dispatch request failed' })
+    } finally {
+      setPendingAction(null)
+    }
+  }
 
   return (
     <section className={cn('rounded-3xl border border-[var(--theme-border)] bg-[var(--theme-card)] p-4 shadow-[0_24px_80px_var(--theme-shadow)]', className)}>
@@ -440,6 +677,103 @@ export function Swarm2KanbanBoard({
         </span>
       </div>
 
+      {feedback ? (
+        <div className={cn(
+          'mb-3 rounded-2xl border px-4 py-3 text-sm',
+          feedback.tone === 'error'
+            ? 'border-red-400/40 bg-red-500/10 text-red-700'
+            : 'border-emerald-400/40 bg-emerald-500/10 text-emerald-700',
+        )}>
+          {feedback.message}
+        </div>
+      ) : null}
+
+      {!readOnly ? (
+        <div className="mb-4 rounded-2xl border border-[var(--theme-border)] bg-[var(--theme-bg)] p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--theme-muted)]">Bounded controls</div>
+              <div className="mt-1 text-sm font-semibold text-[var(--theme-text)]">Create task</div>
+              <p className="mt-1 max-w-3xl text-xs leading-relaxed text-[var(--theme-muted-2)]">
+                Matrix can create, edit, assign, mark ready/blocked, comment, dispatch, reclaim, and reassign. Direct running, review, terminal, and done controls stay worker-owned and unavailable here.
+              </p>
+            </div>
+            <span className="rounded-full border border-[var(--theme-border)] px-2 py-1 text-[10px] uppercase tracking-[0.14em] text-[var(--theme-muted)]">
+              Safe actions only
+            </span>
+          </div>
+          <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_220px]">
+            <label className="space-y-1 text-xs text-[var(--theme-muted)]">
+              <span className="font-semibold text-[var(--theme-text)]">Title</span>
+              <input
+                value={createTitle}
+                onChange={(event) => setCreateTitle(event.target.value)}
+                placeholder="Bounded slice title"
+                className="w-full rounded-xl border border-[var(--theme-border)] bg-[var(--theme-card)] px-3 py-2 text-sm text-[var(--theme-text)] outline-none"
+              />
+            </label>
+            <label className="space-y-1 text-xs text-[var(--theme-muted)]">
+              <span className="font-semibold text-[var(--theme-text)]">Assignee</span>
+              <select
+                value={createAssignee}
+                onChange={(event) => setCreateAssignee(event.target.value)}
+                className="w-full rounded-xl border border-[var(--theme-border)] bg-[var(--theme-card)] px-3 py-2 text-sm text-[var(--theme-text)] outline-none"
+              >
+                <option value="">Unassigned</option>
+                {workers.map((worker) => (
+                  <option key={worker.id} value={worker.id}>
+                    {workerLabel(workers, worker.id)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <label className="mt-3 block space-y-1 text-xs text-[var(--theme-muted)]">
+            <span className="font-semibold text-[var(--theme-text)]">Body / scope</span>
+            <textarea
+              value={createBody}
+              onChange={(event) => setCreateBody(event.target.value)}
+              rows={4}
+              placeholder="Scope, constraints, acceptance criteria"
+              className="w-full rounded-xl border border-[var(--theme-border)] bg-[var(--theme-card)] px-3 py-2 text-sm text-[var(--theme-text)] outline-none"
+            />
+          </label>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              disabled={!createTitle.trim() || pendingAction === 'create_task'}
+              onClick={() => runControlAction({
+                action: 'create_task',
+                board: mutableBoard,
+                title: createTitle.trim(),
+                body: createBody,
+                assignedWorker: createAssignee || null,
+                status: 'backlog',
+              }, 'Draft task created')}
+              className="rounded-full border border-[var(--theme-accent)] bg-[var(--theme-accent-soft)] px-3 py-1.5 text-xs font-semibold text-[var(--theme-accent-strong)] disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {pendingAction === 'create_task' ? 'Creating…' : 'Create draft'}
+            </button>
+            <button
+              type="button"
+              disabled={!createTitle.trim() || pendingAction === 'create_task'}
+              onClick={() => runControlAction({
+                action: 'create_task',
+                board: mutableBoard,
+                title: createTitle.trim(),
+                body: createBody,
+                assignedWorker: createAssignee || null,
+                status: 'ready',
+                reason: 'Created directly into ready from bounded Matrix controls.',
+              }, 'Ready task created')}
+              className="rounded-full border border-blue-400/40 bg-blue-500/10 px-3 py-1.5 text-xs font-semibold text-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Create ready
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       {query.isError ? (
         <div className="rounded-2xl border border-red-400/40 bg-red-500/10 px-4 py-3 text-sm text-red-700">Kanban failed to load: {query.error.message}</div>
       ) : query.isPending ? (
@@ -532,7 +866,7 @@ export function Swarm2KanbanBoard({
                 <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--theme-muted)]">Task drill-down</div>
                 <h3 className="mt-1 text-lg font-semibold text-[var(--theme-text)]">{detail?.title ?? selectedTask.id}</h3>
                 <p className="mt-1 text-xs text-[var(--theme-muted-2)]">
-                  Board: <span className={cn('rounded-full border px-2 py-0.5 font-semibold', getBoardBadgeTone(detail?.board ?? selectedTask.boardSlug))} title={detail?.board ?? selectedTask.boardSlug}>{selectedTask.boardLabel}</span> · Read-only first slice for safer parity with Hermes Kanban.
+                  Board: <span className={cn('rounded-full border px-2 py-0.5 font-semibold', getBoardBadgeTone(detail?.board ?? selectedTask.boardSlug))} title={detail?.board ?? selectedTask.boardSlug}>{selectedTask.boardLabel}</span> · Canonical status first, bounded Matrix controls second.
                 </p>
               </div>
               <button type="button" onClick={() => setSelectedTask(null)} className="rounded-lg border border-[var(--theme-border)] bg-[var(--theme-card2)] px-3 py-1.5 text-sm text-[var(--theme-muted)] hover:text-[var(--theme-text)]">Close</button>
@@ -544,6 +878,26 @@ export function Swarm2KanbanBoard({
               <div className="rounded-2xl border border-red-400/40 bg-red-500/10 px-4 py-3 text-sm text-red-700">Task detail failed to load: {detailQuery.error.message}</div>
             ) : detail ? (
               <div className="space-y-4">
+                <div className={cn('rounded-2xl border p-4 text-sm', controlState.tone)}>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <div className="text-[11px] font-semibold uppercase tracking-[0.18em]">Canonical control state</div>
+                      <div className="mt-1 text-base font-semibold">{controlState.label}</div>
+                    </div>
+                    {latestReceipt?.mutationId ? (
+                      <span className="rounded-full border border-current/20 px-2 py-1 text-[10px] uppercase tracking-[0.14em]">
+                        receipt {latestReceipt.mutationId}
+                      </span>
+                    ) : null}
+                  </div>
+                  {controlState.note ? <p className="mt-2 text-xs leading-relaxed">{controlState.note}</p> : null}
+                  {acceptanceMissingFields.length > 0 && claimEvidence ? (
+                    <div className="mt-2 text-xs">
+                      Missing acceptance fields: <span className="font-semibold">{acceptanceMissingFields.join(', ')}</span>
+                    </div>
+                  ) : null}
+                </div>
+
                 <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                   <div className="rounded-2xl border border-[var(--theme-border)] bg-[var(--theme-bg)] p-3 text-xs">
                     <div className="text-[10px] uppercase tracking-[0.16em] text-[var(--theme-muted)]">Status</div>
@@ -587,6 +941,164 @@ export function Swarm2KanbanBoard({
                   </div>
                 ) : null}
 
+                {!readOnly ? (
+                  <div className="rounded-2xl border border-[var(--theme-border)] bg-[var(--theme-bg)] p-4">
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--theme-muted)]">Bounded task controls</div>
+                    <p className="mt-1 text-xs leading-relaxed text-[var(--theme-muted-2)]">
+                      Only safe task-bound actions are available here. Direct running, review, terminal, and done actions remain intentionally absent.
+                    </p>
+                    <div className="mt-4 grid gap-4 xl:grid-cols-2">
+                      <div className="space-y-3 rounded-2xl border border-[var(--theme-border)] bg-[var(--theme-card)] p-4">
+                        <div className="text-sm font-semibold text-[var(--theme-text)]">Edit task content</div>
+                        <label className="space-y-1 text-xs text-[var(--theme-muted)]">
+                          <span className="font-semibold text-[var(--theme-text)]">Title</span>
+                          <input value={editTitle} onChange={(event) => setEditTitle(event.target.value)} className="w-full rounded-xl border border-[var(--theme-border)] bg-[var(--theme-bg)] px-3 py-2 text-sm text-[var(--theme-text)] outline-none" />
+                        </label>
+                        <label className="space-y-1 text-xs text-[var(--theme-muted)]">
+                          <span className="font-semibold text-[var(--theme-text)]">Body</span>
+                          <textarea value={editBody} onChange={(event) => setEditBody(event.target.value)} rows={5} className="w-full rounded-xl border border-[var(--theme-border)] bg-[var(--theme-bg)] px-3 py-2 text-sm text-[var(--theme-text)] outline-none" />
+                        </label>
+                        <label className="space-y-1 text-xs text-[var(--theme-muted)]">
+                          <span className="font-semibold text-[var(--theme-text)]">Reason</span>
+                          <input value={actionReason} onChange={(event) => setActionReason(event.target.value)} placeholder="Why is this edit or route change safe?" className="w-full rounded-xl border border-[var(--theme-border)] bg-[var(--theme-bg)] px-3 py-2 text-sm text-[var(--theme-text)] outline-none" />
+                        </label>
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            disabled={!canEditTask || !editTitle.trim() || pendingAction === 'edit_task'}
+                            onClick={() => runControlAction({ action: 'edit_task', board: detail.board, taskId: detail.id, title: editTitle.trim(), body: editBody, reason: actionReason.trim() || undefined }, 'Task content updated', selectedTask)}
+                            className="rounded-full border border-[var(--theme-accent)] bg-[var(--theme-accent-soft)] px-3 py-1.5 text-xs font-semibold text-[var(--theme-accent-strong)] disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            Save task content
+                          </button>
+                          <button
+                            type="button"
+                            disabled={!canMarkReady || pendingAction === 'mark_ready'}
+                            onClick={() => runControlAction({ action: 'mark_ready', board: detail.board, taskId: detail.id, reason: actionReason.trim() || 'Marked ready from Matrix bounded controls.' }, 'Task marked ready', selectedTask)}
+                            className="rounded-full border border-blue-400/40 bg-blue-500/10 px-3 py-1.5 text-xs font-semibold text-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            Mark ready
+                          </button>
+                          <button
+                            type="button"
+                            disabled={!canMarkBlocked || pendingAction === 'mark_blocked'}
+                            onClick={() => runControlAction({ action: 'mark_blocked', board: detail.board, taskId: detail.id, reason: actionReason.trim() || 'Blocked from Matrix bounded controls.' }, 'Task marked blocked', selectedTask)}
+                            className="rounded-full border border-red-400/40 bg-red-500/10 px-3 py-1.5 text-xs font-semibold text-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            Mark blocked
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="space-y-3 rounded-2xl border border-[var(--theme-border)] bg-[var(--theme-card)] p-4">
+                        <div className="text-sm font-semibold text-[var(--theme-text)]">Assign and route</div>
+                        <label className="space-y-1 text-xs text-[var(--theme-muted)]">
+                          <span className="font-semibold text-[var(--theme-text)]">Assignee</span>
+                          <select value={assignWorkerId} onChange={(event) => setAssignWorkerId(event.target.value)} className="w-full rounded-xl border border-[var(--theme-border)] bg-[var(--theme-bg)] px-3 py-2 text-sm text-[var(--theme-text)] outline-none">
+                            <option value="">Unassigned</option>
+                            {workers.map((worker) => (
+                              <option key={worker.id} value={worker.id}>{workerLabel(workers, worker.id)}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            disabled={!canAssignWorker || pendingAction === 'assign_task'}
+                            onClick={() => runControlAction({ action: 'assign_task', board: detail.board, taskId: detail.id, assignedWorker: assignWorkerId || null, reason: actionReason.trim() || undefined }, assignWorkerId ? `Assigned ${workerLabel(workers, assignWorkerId)}` : 'Task unassigned', selectedTask)}
+                            className="rounded-full border border-[var(--theme-accent)] bg-[var(--theme-accent-soft)] px-3 py-1.5 text-xs font-semibold text-[var(--theme-accent-strong)] disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            Assign worker
+                          </button>
+                          <button
+                            type="button"
+                            disabled={!canReclaim || pendingAction === 'reclaim_worker' || !reclaimReason.trim()}
+                            onClick={() => runControlAction({ action: 'reclaim_worker', board: detail.board, taskId: detail.id, reason: reclaimReason.trim() }, 'Worker reclaimed back to backlog', selectedTask)}
+                            className="rounded-full border border-amber-400/40 bg-amber-500/10 px-3 py-1.5 text-xs font-semibold text-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            Reclaim
+                          </button>
+                        </div>
+                        <label className="space-y-1 text-xs text-[var(--theme-muted)]">
+                          <span className="font-semibold text-[var(--theme-text)]">Routing comment</span>
+                          <textarea value={routingComment} onChange={(event) => setRoutingComment(event.target.value)} rows={4} placeholder="Rationale, blocker note, dependency note, dispatch intent" className="w-full rounded-xl border border-[var(--theme-border)] bg-[var(--theme-bg)] px-3 py-2 text-sm text-[var(--theme-text)] outline-none" />
+                        </label>
+                        <button
+                          type="button"
+                          disabled={!routingComment.trim() || pendingAction === 'add_comment'}
+                          onClick={() => runControlAction({ action: 'add_comment', board: detail.board, taskId: detail.id, comment: routingComment.trim(), reason: actionReason.trim() || undefined }, 'Routing comment added', selectedTask)}
+                          className="rounded-full border border-[var(--theme-border)] px-3 py-1.5 text-xs font-semibold text-[var(--theme-muted)] disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          Add routing comment
+                        </button>
+                      </div>
+
+                      <div className="space-y-3 rounded-2xl border border-[var(--theme-border)] bg-[var(--theme-card)] p-4">
+                        <div className="text-sm font-semibold text-[var(--theme-text)]">Dispatch request</div>
+                        <p className="text-xs leading-relaxed text-[var(--theme-muted-2)]">
+                          Dispatch does not require prior acceptance here. It stays queued until canonical claim evidence appears, then shifts to acceptance pending until the specialist writes the acceptance fields.
+                        </p>
+                        <label className="space-y-1 text-xs text-[var(--theme-muted)]">
+                          <span className="font-semibold text-[var(--theme-text)]">Dispatch reason</span>
+                          <input value={dispatchReason} onChange={(event) => setDispatchReason(event.target.value)} placeholder="Why this worker, why now" className="w-full rounded-xl border border-[var(--theme-border)] bg-[var(--theme-bg)] px-3 py-2 text-sm text-[var(--theme-text)] outline-none" />
+                        </label>
+                        {!detail.assignee?.trim() ? <div className="text-xs text-amber-700">Assign a worker before dispatch.</div> : null}
+                        {!taskHasUsableScope(detail) ? <div className="text-xs text-amber-700">Add task title/body scope before dispatch.</div> : null}
+                        <button
+                          type="button"
+                          disabled={!canDispatch || pendingAction === 'request_dispatch'}
+                          onClick={runDispatchRequest}
+                          className="rounded-full border border-blue-400/40 bg-blue-500/10 px-3 py-1.5 text-xs font-semibold text-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {pendingAction === 'request_dispatch' ? 'Queueing…' : 'Request dispatch'}
+                        </button>
+                        {latestReceipt ? (
+                          <div className="rounded-xl border border-[var(--theme-border)] bg-[var(--theme-bg)] p-3 text-xs text-[var(--theme-muted)]">
+                            <div>Mission: <span className="font-semibold text-[var(--theme-text)]">{latestReceipt.missionId ?? '—'}</span></div>
+                            <div>Assignment: <span className="font-semibold text-[var(--theme-text)]">{latestReceipt.assignmentId ?? '—'}</span></div>
+                            <div>Delivery: <span className="font-semibold text-[var(--theme-text)]">{latestReceipt.delivery ?? '—'}</span></div>
+                            <div>Outcome: <span className="font-semibold text-[var(--theme-text)]">{controlState.label}</span></div>
+                          </div>
+                        ) : null}
+                      </div>
+
+                      <div className="space-y-3 rounded-2xl border border-[var(--theme-border)] bg-[var(--theme-card)] p-4">
+                        <div className="text-sm font-semibold text-[var(--theme-text)]">Reassign worker</div>
+                        <p className="text-xs leading-relaxed text-[var(--theme-muted-2)]">Reassign and reclaim remain pre-claim controls only. Once canonical claim/run evidence exists, Matrix must stop here.</p>
+                        <label className="space-y-1 text-xs text-[var(--theme-muted)]">
+                          <span className="font-semibold text-[var(--theme-text)]">New assignee</span>
+                          <select value={reassignWorkerId} onChange={(event) => setReassignWorkerId(event.target.value)} className="w-full rounded-xl border border-[var(--theme-border)] bg-[var(--theme-bg)] px-3 py-2 text-sm text-[var(--theme-text)] outline-none">
+                            <option value="">Choose worker</option>
+                            {workers.map((worker) => (
+                              <option key={worker.id} value={worker.id}>{workerLabel(workers, worker.id)}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="space-y-1 text-xs text-[var(--theme-muted)]">
+                          <span className="font-semibold text-[var(--theme-text)]">Reassign reason</span>
+                          <textarea value={reassignReason} onChange={(event) => setReassignReason(event.target.value)} rows={3} placeholder="Why the current assignee is no longer the right lane" className="w-full rounded-xl border border-[var(--theme-border)] bg-[var(--theme-bg)] px-3 py-2 text-sm text-[var(--theme-text)] outline-none" />
+                        </label>
+                        <label className="space-y-1 text-xs text-[var(--theme-muted)]">
+                          <span className="font-semibold text-[var(--theme-text)]">Reclaim reason</span>
+                          <textarea value={reclaimReason} onChange={(event) => setReclaimReason(event.target.value)} rows={3} placeholder="Why this should go back to backlog/unassigned" className="w-full rounded-xl border border-[var(--theme-border)] bg-[var(--theme-bg)] px-3 py-2 text-sm text-[var(--theme-text)] outline-none" />
+                        </label>
+                        <button
+                          type="button"
+                          disabled={!canReclaim || !reassignWorkerId.trim() || !reassignReason.trim() || pendingAction === 'reassign_worker'}
+                          onClick={() => runControlAction({ action: 'reassign_worker', board: detail.board, taskId: detail.id, assignedWorker: reassignWorkerId.trim(), reason: reassignReason.trim() }, `Reassigned to ${workerLabel(workers, reassignWorkerId.trim())}`, selectedTask)}
+                          className="rounded-full border border-[var(--theme-accent)] bg-[var(--theme-accent-soft)] px-3 py-1.5 text-xs font-semibold text-[var(--theme-accent-strong)] disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          Reassign worker
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rounded-2xl border border-[var(--theme-border)] bg-[var(--theme-bg)] p-4 text-sm text-[var(--theme-muted)]">
+                    This board is read-only in the current backend. Matrix can still surface canonical receipts, warnings, and worker evidence here.
+                  </div>
+                )}
+
                 <div className="grid gap-4 xl:grid-cols-[minmax(0,1.3fr)_minmax(320px,0.9fr)]">
                   <div className="space-y-4">
                     <div className="rounded-2xl border border-[var(--theme-border)] bg-[var(--theme-bg)] p-4">
@@ -618,6 +1130,34 @@ export function Swarm2KanbanBoard({
                   </div>
 
                   <div className="space-y-4">
+                    <div className="rounded-2xl border border-[var(--theme-border)] bg-[var(--theme-bg)] p-4 text-xs text-[var(--theme-text)]">
+                      <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--theme-muted)]">Control receipts</div>
+                      <div className="mt-2 space-y-3">
+                        {detail.controlReceipts.length === 0 ? (
+                          <div className="text-xs text-[var(--theme-muted)]">No Matrix-origin control receipts are recorded for this task yet.</div>
+                        ) : detail.controlReceipts.map((receipt, index) => (
+                          <div key={`${receipt.mutationId ?? receipt.kind}-${index}`} className="rounded-xl border border-[var(--theme-border)] bg-[var(--theme-card)] p-3 text-xs">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <span className="font-semibold text-[var(--theme-text)]">{receipt.kind === 'matrix_dispatch_receipt' ? 'Dispatch receipt' : 'Control receipt'}</span>
+                              <span className="text-[10px] uppercase tracking-[0.14em] text-[var(--theme-muted)]">{formatTimestamp(receipt.createdAt)}</span>
+                            </div>
+                            <div className="mt-2 space-y-1 text-[11px] text-[var(--theme-muted)]">
+                              <div>Mutation: <span className="text-[var(--theme-text)]">{receipt.mutationId ?? '—'}</span></div>
+                              <div>Action: <span className="text-[var(--theme-text)]">{receipt.action ?? '—'}</span></div>
+                              <div>Actor: <span className="text-[var(--theme-text)]">{receipt.actor ?? '—'}</span></div>
+                              {receipt.missionId ? <div>Mission: <span className="text-[var(--theme-text)]">{receipt.missionId}</span></div> : null}
+                              {receipt.assignmentId ? <div>Assignment: <span className="text-[var(--theme-text)]">{receipt.assignmentId}</span></div> : null}
+                              {receipt.workerId ? <div>Worker: <span className="text-[var(--theme-text)]">{receipt.workerId}</span></div> : null}
+                              {receipt.delivery ? <div>Delivery: <span className="text-[var(--theme-text)]">{receipt.delivery}</span></div> : null}
+                              {receipt.stateAfter ? <div>State after: <span className="text-[var(--theme-text)]">{receipt.stateAfter}</span></div> : null}
+                              {receipt.reason ? <div>Reason: <span className="text-[var(--theme-text)]">{receipt.reason}</span></div> : null}
+                              {receipt.detail ? <div>Detail: <span className="text-[var(--theme-text)]">{receipt.detail}</span></div> : null}
+                              {receipt.error ? <pre className="mt-2 whitespace-pre-wrap break-words rounded-lg border border-red-400/40 bg-red-500/10 p-2 text-xs text-red-700">{receipt.error}</pre> : null}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
                     <div className="rounded-2xl border border-[var(--theme-border)] bg-[var(--theme-bg)] p-4 text-xs text-[var(--theme-text)]">
                       <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--theme-muted)]">Workspace</div>
                       <div className="mt-2 space-y-2">

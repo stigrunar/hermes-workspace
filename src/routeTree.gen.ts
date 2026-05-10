@@ -50,6 +50,7 @@ import { Route as ApiSwarmOrchestratorLoopRouteImport } from './routes/api/swarm
 import { Route as ApiSwarmMissionsRouteImport } from './routes/api/swarm-missions'
 import { Route as ApiSwarmMemoryRouteImport } from './routes/api/swarm-memory'
 import { Route as ApiSwarmLifecycleRouteImport } from './routes/api/swarm-lifecycle'
+import { Route as ApiSwarmKanbanControlRouteImport } from './routes/api/swarm-kanban-control'
 import { Route as ApiSwarmKanbanRouteImport } from './routes/api/swarm-kanban'
 import { Route as ApiSwarmHealthRouteImport } from './routes/api/swarm-health'
 import { Route as ApiSwarmEnvironmentRouteImport } from './routes/api/swarm-environment'
@@ -350,6 +351,11 @@ const ApiSwarmMemoryRoute = ApiSwarmMemoryRouteImport.update({
 const ApiSwarmLifecycleRoute = ApiSwarmLifecycleRouteImport.update({
   id: '/api/swarm-lifecycle',
   path: '/api/swarm-lifecycle',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiSwarmKanbanControlRoute = ApiSwarmKanbanControlRouteImport.update({
+  id: '/api/swarm-kanban-control',
+  path: '/api/swarm-kanban-control',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiSwarmKanbanRoute = ApiSwarmKanbanRouteImport.update({
@@ -901,6 +907,7 @@ export interface FileRoutesByFullPath {
   '/api/swarm-environment': typeof ApiSwarmEnvironmentRoute
   '/api/swarm-health': typeof ApiSwarmHealthRoute
   '/api/swarm-kanban': typeof ApiSwarmKanbanRoute
+  '/api/swarm-kanban-control': typeof ApiSwarmKanbanControlRoute
   '/api/swarm-lifecycle': typeof ApiSwarmLifecycleRoute
   '/api/swarm-memory': typeof ApiSwarmMemoryRouteWithChildren
   '/api/swarm-missions': typeof ApiSwarmMissionsRoute
@@ -1038,6 +1045,7 @@ export interface FileRoutesByTo {
   '/api/swarm-environment': typeof ApiSwarmEnvironmentRoute
   '/api/swarm-health': typeof ApiSwarmHealthRoute
   '/api/swarm-kanban': typeof ApiSwarmKanbanRoute
+  '/api/swarm-kanban-control': typeof ApiSwarmKanbanControlRoute
   '/api/swarm-lifecycle': typeof ApiSwarmLifecycleRoute
   '/api/swarm-memory': typeof ApiSwarmMemoryRouteWithChildren
   '/api/swarm-missions': typeof ApiSwarmMissionsRoute
@@ -1177,6 +1185,7 @@ export interface FileRoutesById {
   '/api/swarm-environment': typeof ApiSwarmEnvironmentRoute
   '/api/swarm-health': typeof ApiSwarmHealthRoute
   '/api/swarm-kanban': typeof ApiSwarmKanbanRoute
+  '/api/swarm-kanban-control': typeof ApiSwarmKanbanControlRoute
   '/api/swarm-lifecycle': typeof ApiSwarmLifecycleRoute
   '/api/swarm-memory': typeof ApiSwarmMemoryRouteWithChildren
   '/api/swarm-missions': typeof ApiSwarmMissionsRoute
@@ -1317,6 +1326,7 @@ export interface FileRouteTypes {
     | '/api/swarm-environment'
     | '/api/swarm-health'
     | '/api/swarm-kanban'
+    | '/api/swarm-kanban-control'
     | '/api/swarm-lifecycle'
     | '/api/swarm-memory'
     | '/api/swarm-missions'
@@ -1454,6 +1464,7 @@ export interface FileRouteTypes {
     | '/api/swarm-environment'
     | '/api/swarm-health'
     | '/api/swarm-kanban'
+    | '/api/swarm-kanban-control'
     | '/api/swarm-lifecycle'
     | '/api/swarm-memory'
     | '/api/swarm-missions'
@@ -1592,6 +1603,7 @@ export interface FileRouteTypes {
     | '/api/swarm-environment'
     | '/api/swarm-health'
     | '/api/swarm-kanban'
+    | '/api/swarm-kanban-control'
     | '/api/swarm-lifecycle'
     | '/api/swarm-memory'
     | '/api/swarm-missions'
@@ -1731,6 +1743,7 @@ export interface RootRouteChildren {
   ApiSwarmEnvironmentRoute: typeof ApiSwarmEnvironmentRoute
   ApiSwarmHealthRoute: typeof ApiSwarmHealthRoute
   ApiSwarmKanbanRoute: typeof ApiSwarmKanbanRoute
+  ApiSwarmKanbanControlRoute: typeof ApiSwarmKanbanControlRoute
   ApiSwarmLifecycleRoute: typeof ApiSwarmLifecycleRoute
   ApiSwarmMemoryRoute: typeof ApiSwarmMemoryRouteWithChildren
   ApiSwarmMissionsRoute: typeof ApiSwarmMissionsRoute
@@ -2060,6 +2073,13 @@ declare module '@tanstack/react-router' {
       path: '/api/swarm-lifecycle'
       fullPath: '/api/swarm-lifecycle'
       preLoaderRoute: typeof ApiSwarmLifecycleRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/swarm-kanban-control': {
+      id: '/api/swarm-kanban-control'
+      path: '/api/swarm-kanban-control'
+      fullPath: '/api/swarm-kanban-control'
+      preLoaderRoute: typeof ApiSwarmKanbanControlRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/swarm-kanban': {
@@ -2961,6 +2981,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiSwarmEnvironmentRoute: ApiSwarmEnvironmentRoute,
   ApiSwarmHealthRoute: ApiSwarmHealthRoute,
   ApiSwarmKanbanRoute: ApiSwarmKanbanRoute,
+  ApiSwarmKanbanControlRoute: ApiSwarmKanbanControlRoute,
   ApiSwarmLifecycleRoute: ApiSwarmLifecycleRoute,
   ApiSwarmMemoryRoute: ApiSwarmMemoryRouteWithChildren,
   ApiSwarmMissionsRoute: ApiSwarmMissionsRoute,

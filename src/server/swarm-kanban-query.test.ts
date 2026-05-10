@@ -132,6 +132,32 @@ async function loadSqliteQueryModule() {
       ])
     }
 
+    if (dbPath === missionControlDb && sql?.includes("where task_id = 't_done_parent' and kind in ('specialist_accepted', 'accepted')")) {
+      return JSON.stringify([])
+    }
+
+    if (dbPath === missionControlDb && sql?.includes("where task_id = 't_done_parent' and kind in ('matrix_control', 'matrix_dispatch_receipt')")) {
+      return JSON.stringify([
+        {
+          kind: 'matrix_dispatch_receipt',
+          payload: JSON.stringify({
+            mutationId: 'mx_dispatch_1',
+            taskId: 't_done_parent',
+            missionId: 'mission_1',
+            assignmentId: 'assign_1',
+            workerId: 'dollycode',
+            delivery: 'tmux',
+            ok: true,
+            state: 'claimed-spawned',
+            acceptancePending: true,
+            checkpointStatus: 'not-requested',
+            stateAfter: 'running',
+          }),
+          created_at: 130,
+        },
+      ])
+    }
+
     if (dbPath === missionControlDb && sql?.includes('from task_comments')) {
       return JSON.stringify([{ author: 'dollycode', body: 'accepted', created_at: 125 }])
     }
@@ -280,6 +306,20 @@ describe('querySwarmKanbanBoard done audit', () => {
           'Done has no completed run/event evidence exposed by the canonical Kanban DB.',
         ],
       },
+    })
+  })
+
+  it('includes dispatch receipt lifecycle fields so UI can show acceptance pending after claim', async () => {
+    const { mod } = await loadSqliteQueryModule()
+
+    const result = await mod.getSwarmKanbanTaskDetail({ board: 'mission-control', taskId: 't_done_parent' })
+
+    expect(result?.controlReceipts[0]).toMatchObject({
+      kind: 'matrix_dispatch_receipt',
+      state: 'claimed-spawned',
+      acceptancePending: true,
+      stateAfter: 'running',
+      workerId: 'dollycode',
     })
   })
 })

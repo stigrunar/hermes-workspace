@@ -10,15 +10,12 @@ import {
   listDashboardKanbanBoards
 } from './kanban-dashboard-proxy'
 import { getCapabilities } from './gateway-capabilities'
-import {  getKanbanBackendMeta } from './kanban-backend'
-import {
-  SWARM_KANBAN_FILE,
-  
-  listSwarmKanbanCards
-} from './swarm-kanban-store'
-import type {KanbanBackendMeta} from './kanban-backend';
-import type {SwarmKanbanCard} from './swarm-kanban-store';
-import type {DashboardKanbanBoard} from './kanban-dashboard-proxy';
+import { getKanbanBackendMeta } from './kanban-backend'
+import { ACCEPTANCE_FIELDS, findTaskAcceptance } from './swarm-kanban-canonical'
+import { SWARM_KANBAN_FILE, listSwarmKanbanCards } from './swarm-kanban-store'
+import type { KanbanBackendMeta } from './kanban-backend'
+import type { DashboardKanbanBoard } from './kanban-dashboard-proxy'
+import type { SwarmKanbanCard } from './swarm-kanban-store'
 
 export type SwarmKanbanBoardOption = {
   slug: string
@@ -79,6 +76,29 @@ export type SwarmKanbanTaskRun = {
   endedAt: number | null
 }
 
+export type SwarmKanbanTaskAcceptance = Partial<Record<(typeof ACCEPTANCE_FIELDS)[number], string>>
+
+export type SwarmKanbanControlReceipt = {
+  kind: 'matrix_control' | 'matrix_dispatch_receipt'
+  createdAt: number | null
+  mutationId: string | null
+  actor: string | null
+  reason: string | null
+  action: string | null
+  detail: string | null
+  taskId: string | null
+  missionId: string | null
+  assignmentId: string | null
+  workerId: string | null
+  delivery: string | null
+  ok: boolean | null
+  state: 'queued' | 'claimed-spawned' | 'accepted' | 'failed' | null
+  acceptancePending: boolean | null
+  checkpointStatus: string | null
+  stateAfter: string | null
+  error: string | null
+}
+
 export type SwarmKanbanTaskDetail = {
   id: string
   board: string
@@ -97,6 +117,8 @@ export type SwarmKanbanTaskDetail = {
   completedAt: number | null
   comments: Array<SwarmKanbanTaskComment>
   recentRuns: Array<SwarmKanbanTaskRun>
+  acceptance: SwarmKanbanTaskAcceptance | null
+  controlReceipts: Array<SwarmKanbanControlReceipt>
   doneAudit: SwarmKanbanDoneAudit | null
 }
 
@@ -131,6 +153,12 @@ type SqliteRunRow = {
   error?: string | null
   started_at?: number | string | null
   ended_at?: number | string | null
+}
+
+type SqliteEventRow = {
+  kind?: string | null
+  payload?: string | null
+  created_at?: number | string | null
 }
 
 type SqliteDoneAuditRow = {
@@ -197,6 +225,24 @@ function normalizeTimestamp(value: unknown): number | null {
     if (Number.isFinite(parsed)) return parsed
   }
   return null
+}
+
+function parseJsonRecord(value: string | null | undefined): Record<string, unknown> | null {
+  if (!value) return null
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : null
+  } catch {
+    return null
+  }
+}
+
+function toNullableString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null
+}
+
+function toNullableBoolean(value: unknown): boolean | null {
+  return typeof value === 'boolean' ? value : null
 }
 
 function mapStatusToLane(status: string | null | undefined): SwarmKanbanCard['status'] {
@@ -319,6 +365,40 @@ function doneAuditMapForBoard(dbPath: string): Map<string, SwarmKanbanDoneAudit>
   )
 }
 
+function parseControlReceipt(event: SqliteEventRow): SwarmKanbanControlReceipt | null {
+  const kind = event.kind === 'matrix_dispatch_receipt' || event.kind === 'matrix_control' ? event.kind : null
+  if (!kind) return null
+  const payload = parseJsonRecord(event.payload)
+  const state = toNullableString(payload?.state)
+  return {
+    kind,
+    createdAt: normalizeTimestamp(event.created_at),
+    mutationId: toNullableString(payload?.mutationId),
+    actor: toNullableString(payload?.actor),
+    reason: toNullableString(payload?.reason),
+    action: toNullableString(payload?.action),
+    detail: toNullableString(payload?.detail),
+    taskId: toNullableString(payload?.taskId),
+    missionId: toNullableString(payload?.missionId),
+    assignmentId: toNullableString(payload?.assignmentId),
+    workerId: toNullableString(payload?.workerId),
+    delivery: toNullableString(payload?.delivery),
+    ok: toNullableBoolean(payload?.ok),
+    state:
+      state === 'queued' || state === 'claimed-spawned' || state === 'accepted' || state === 'failed'
+        ? state
+        : null,
+    acceptancePending: toNullableBoolean(payload?.acceptancePending),
+    checkpointStatus: toNullableString(payload?.checkpointStatus),
+    stateAfter: toNullableString(payload?.stateAfter),
+    error: toNullableString(payload?.error),
+  }
+}
+
+function summarizeAcceptance(acceptance: ReturnType<typeof findTaskAcceptance>): SwarmKanbanTaskAcceptance | null {
+  return acceptance ? { ...acceptance } : null
+}
+
 function withBoardMeta(
   card: SwarmKanbanCard,
   board: Pick<SwarmKanbanBoardOption, 'slug' | 'label' | 'source'>,
@@ -432,7 +512,7 @@ async function resolveBoard(requestedBoard?: string | null): Promise<ResolvedBoa
     label: selected.label,
     description: selected.description,
     fallback: Boolean(requested && requested !== selected.slug),
-    dbPath: selected.source === 'local' ? null : boardDbPath(selected.slug),
+    dbPath: selected.source === 'sqlite' ? boardDbPath(selected.slug) : null,
     source: selected.source,
   }
 }
@@ -510,7 +590,7 @@ export async function querySwarmKanbanBoard(input: {
       description: resolved.description,
       fallback: resolved.fallback,
     },
-    readOnly: true,
+    readOnly: !(backend.writable && backend.id !== 'local'),
     taskDetail: input.taskId ? await getSwarmKanbanTaskDetail({ board: detailBoard, taskId: input.taskId }) : null,
   }
 }
@@ -520,30 +600,6 @@ export async function getSwarmKanbanTaskDetail(input: {
   taskId: string
 }): Promise<SwarmKanbanTaskDetail | null> {
   const resolved = await resolveBoard(input.board)
-  if (getCapabilities().kanban) {
-    const task = await fetchDashboardKanbanTask(input.taskId, resolved.slug)
-    if (!task) return null
-    return {
-      id: task.id,
-      board: resolved.slug,
-      title: task.title,
-      status: task.status,
-      lane: mapStatusToLane(task.status),
-      assignee: task.assignee ?? null,
-      createdBy: task.created_by ?? null,
-      body: task.body ?? '',
-      result: null,
-      workspaceKind: task.workspace_kind ?? null,
-      workspacePath: task.workspace_path ?? null,
-      currentRunId: null,
-      createdAt: normalizeTimestamp(task.created_at),
-      startedAt: normalizeTimestamp(task.started_at),
-      completedAt: normalizeTimestamp(task.completed_at),
-      comments: [],
-      recentRuns: [],
-      doneAudit: null,
-    }
-  }
 
   if (resolved.dbPath) {
     const taskRows = sqliteJson<Array<SqliteTaskRow>>(
@@ -577,7 +633,20 @@ export async function getSwarmKanbanTaskDetail(input: {
         'limit 5;',
       ].join(' '),
     )
+    const events = sqliteJson<Array<SqliteEventRow>>(
+      resolved.dbPath,
+      [
+        'select kind, payload, created_at',
+        'from task_events',
+        `where task_id = '${input.taskId.replace(/'/g, "''")}' and kind in ('matrix_control', 'matrix_dispatch_receipt')`,
+        'order by created_at desc, id desc',
+        'limit 8;',
+      ].join(' '),
+    )
     const doneAudit = doneAuditForTask(resolved.dbPath, task.id, task.status)
+    const controlReceipts = events
+      .map((event) => parseControlReceipt(event))
+      .filter((event): event is SwarmKanbanControlReceipt => Boolean(event))
     return {
       id: task.id,
       board: resolved.slug,
@@ -609,7 +678,36 @@ export async function getSwarmKanbanTaskDetail(input: {
         startedAt: normalizeTimestamp(run.started_at),
         endedAt: normalizeTimestamp(run.ended_at),
       })),
+      acceptance: summarizeAcceptance(findTaskAcceptance(input.taskId, resolved.slug)),
+      controlReceipts,
       doneAudit,
+    }
+  }
+
+  if (getCapabilities().kanban) {
+    const task = await fetchDashboardKanbanTask(input.taskId, resolved.slug)
+    if (!task) return null
+    return {
+      id: task.id,
+      board: resolved.slug,
+      title: task.title,
+      status: task.status,
+      lane: mapStatusToLane(task.status),
+      assignee: task.assignee ?? null,
+      createdBy: task.created_by ?? null,
+      body: task.body ?? '',
+      result: null,
+      workspaceKind: task.workspace_kind ?? null,
+      workspacePath: task.workspace_path ?? null,
+      currentRunId: null,
+      createdAt: normalizeTimestamp(task.created_at),
+      startedAt: normalizeTimestamp(task.started_at),
+      completedAt: normalizeTimestamp(task.completed_at),
+      comments: [],
+      recentRuns: [],
+      acceptance: null,
+      controlReceipts: [],
+      doneAudit: null,
     }
   }
 
@@ -633,6 +731,8 @@ export async function getSwarmKanbanTaskDetail(input: {
     completedAt: null,
     comments: [],
     recentRuns: [],
+    acceptance: null,
+    controlReceipts: [],
     doneAudit: null,
   }
 }
