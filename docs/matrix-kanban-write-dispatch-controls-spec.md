@@ -1,6 +1,6 @@
 # Matrix safe Kanban write + dispatch controls
 
-Status: proposed bounded control-plane spec
+Status: proposed bounded control-plane spec, corrected 2026-05-10 after acceptance-lifecycle review
 Owner for this spec: DollyOps
 Scope: The Matrix cockpit write/mutate Kanban actions and worker-control/dispatch UX
 
@@ -24,19 +24,14 @@ Verified in the live checkout on branch `stig/the-matrix`:
    - those direct writes do not append worker-style completion evidence, acceptance metadata, or a Matrix-origin audit comment/event.
 4. `src/routes/api/swarm-dispatch.ts`
    - dispatch is authenticated and observable by default (`waitForCheckpoint` defaults on).
-   - dispatch creates mission/checkpoint telemetry.
-   - dispatch is not currently bound to a canonical Kanban task id, specialist acceptance fields, or a dispatch receipt written back onto the task.
-5. Repo search found no current implementation of the required specialist acceptance fields:
-   - `accepted_by`
-   - `accepted_at`
-   - `lane`
-   - `scope_understood`
-   - `first_action`
-   - `expected_artifact`
-   - `risk_level`
-   - `will_not_do`
+   - dispatch is now task-bound and writes canonical request/receipt evidence.
+   - it still hard-fails missing acceptance before dispatch and can write request-supplied acceptance into canonical task evidence when the task has none.
+   - that inverts the normal worker lifecycle because acceptance is usually written by the spawned specialist after `kanban_show()`.
+5. `src/server/swarm-kanban-query.ts`
+   - task detail now exposes canonical `acceptance` plus control receipts.
+   - human-facing lifecycle wording still needs a distinct `claimed/spawned; acceptance pending` state instead of treating raw `running` as `i arbeid`.
 
-Conclusion: Matrix already has a good read/audit foundation and a direct-`done` guard, but it does not yet have a safe mutation contract or a dispatch-to-task verification boundary.
+Conclusion: Matrix already has a good read/audit foundation, a bounded mutation path, and task-bound receipts, but the acceptance gate is wired at the wrong phase. Dispatch readiness/assignee validity belong before dispatch; specialist acceptance belongs after claim and before human-facing `i arbeid`.
 
 ## 2) Problem to solve
 
@@ -105,7 +100,7 @@ These should hard-fail with explicit conflict messages:
 3. Direct `review` if that status is meant to imply worker progress rather than an operator note
 4. Direct mutation of `completed_at`, `started_at`, `current_run_id`, `result`, or worker-run evidence fields
 5. Dispatch without a canonical `taskId`
-6. Dispatch when specialist acceptance fields are missing
+6. Controller/browser request-supplied acceptance written as canonical proof before the specialist worker has actually accepted
 7. Dispatch to a worker id that does not match the task assignee unless an explicit override + audit reason is provided
 8. Silent mutation paths that do not write a Matrix-origin audit record
 
@@ -161,9 +156,9 @@ Benefits:
 - easier to reject invalid transitions with human-readable errors
 - easier to keep worker-owned fields immutable
 
-## 8) Acceptance gate before dispatch / underway status
+## 8) Acceptance gate after claim, before underway status
 
-Before Matrix can request dispatch or show specialist work as underway, require acceptance metadata for the assigned specialist.
+Before Matrix can show specialist work as underway, require acceptance metadata for the assigned specialist.
 
 Required fields:
 - `accepted_by`
@@ -176,13 +171,14 @@ Required fields:
 - `will_not_do`
 
 Policy:
-1. Matrix may create or edit the task before acceptance.
-2. Matrix may assign a specialist before acceptance.
-3. Matrix may show `assigned`, but not `in progress` / `i arbeid`, until acceptance exists.
-4. `request_dispatch` must fail with 409 if any acceptance field is missing.
-5. successful dispatch should either:
-   - write a dispatcher claim/receipt that moves the canonical task into `running`, or
-   - return `queued_for_dispatch` while the canonical dispatcher performs the actual claim.
+1. Matrix may create, edit, and assign a specialist before acceptance.
+2. `request_dispatch` must require a canonical `taskId`, ready status, valid assignee/profile match, usable scope/body, and operator reason, but it must not require prior specialist acceptance.
+3. successful dispatch should write a dispatcher request/receipt and either:
+   - return `queued_for_dispatch` while the canonical dispatcher performs the actual claim, or
+   - return `claimed/spawned` once canonical claim/run evidence exists.
+4. If claim/run evidence exists but acceptance fields are still missing, UI/API/diagnostics must show `claimed/spawned; acceptance pending`, not `in progress` / `i arbeid`.
+5. Acceptance must be written as canonical task evidence by the specialist worker itself within a short post-claim grace window.
+6. Request-supplied acceptance payload from Matrix/browser/controller does not count as proof and must not be written as canonical acceptance unless the authenticated actor is the specialist worker itself.
 
 ## 9) Dispatch verification contract
 
@@ -207,17 +203,20 @@ Required writeback onto canonical task:
 
 Required verification states:
 1. `rejected`
-   - acceptance missing, wrong assignee, invalid worker, stale version, task not ready
+   - wrong assignee, invalid worker, stale version, task not ready, or other pre-dispatch contract failure
 2. `queued`
    - accepted by Matrix control plane, waiting for dispatcher claim
-3. `claimed/running`
-   - canonical task now shows claim/run evidence
-4. `failed`
+3. `claimed/spawned`
+   - canonical task now shows claim/run evidence, but specialist acceptance is still missing or not yet verified
+4. `accepted`
+   - canonical claim/run evidence exists and all specialist acceptance fields exist, so this is real `i arbeid`
+5. `failed`
    - delivery or worker startup failed; attach reason
 
 UI rule:
 - do not present `running` from Matrix optimism alone
 - present `Dispatch queued` until canonical task/run evidence confirms claim
+- after claim, present `Acceptance pending` until canonical specialist acceptance exists
 
 ## 10) Audit log and evidence requirements
 
@@ -301,9 +300,9 @@ Do not expose yet:
 
 Visible affordances:
 - badge: `Read/write bounded controls`
-- conflict banners with exact reason (`Acceptance missing: expected_artifact, will_not_do`)
+- conflict/attention banners with exact reason (`Task not ready`, `Assignee mismatch`, `Acceptance pending: 6m since claim`)
 - dispatch receipt card with mission/assignment ids
-- canonical-state badge (`Queued`, `Claimed`, `Running`, `Blocked`, `Done via worker`)
+- canonical-state badge (`Queued`, `Claimed/spawned`, `Acceptance pending`, `Accepted`, `Blocked`, `Done via worker`)
 
 ## 14) Implementation slices
 
@@ -325,26 +324,27 @@ Acceptance:
 
 Deliver:
 - `request_dispatch` action bound to `taskId`
-- acceptance-field gate
+- pre-dispatch contract gate for task readiness/assignee/scope, not prior specialist acceptance
 - canonical dispatch receipt writeback
-- status model: rejected / queued / claimed / failed
+- status model: rejected / queued / claimed-spawned / accepted / failed
 
 Acceptance:
 - dispatch without `taskId` -> 409/400
-- dispatch with missing acceptance fields -> 409
+- dispatch with valid ready task + assignee can queue/claim even when acceptance is still missing
+- request-supplied acceptance from Matrix does not count as proof
 - dispatch success returns mission/assignment/worker receipt
-- Matrix UI does not show `running` until canonical evidence exists
+- Matrix UI does not show `i arbeid` until canonical acceptance exists
 
 ### Slice C — Matrix UX + regression coverage
 
 Deliver:
 - bounded write controls in Kanban detail panel
 - dispatch/reclaim/reassign affordances with explicit reason fields
-- tests for auth, transition policy, acceptance gate, and receipt rendering
+- tests for auth, transition policy, acceptance-pending state, and receipt rendering
 
 Acceptance:
 - targeted API tests cover allow/deny matrix
-- UI smoke confirms warnings/receipts/conflicts are visible
+- UI smoke confirms warnings/receipts/conflicts are visible, including `Dispatch queued`, `Claimed/spawned`, and `Acceptance pending`
 - existing `doneAudit` warnings remain intact
 
 ## 15) Risks / pitfalls
@@ -374,5 +374,6 @@ Safe Matrix Kanban mutation is viable, but only if Matrix acts like a bounded op
 
 The hard boundary is simple:
 - Matrix can prepare, route, block, and request dispatch.
-- workers still own `done`, evidence, and true `running` state.
+- dispatcher claim is process evidence, not ownership proof.
+- workers still own specialist acceptance, `done`, evidence, and human-facing `i arbeid` truth.
 - every Matrix-origin action must leave a canonical audit trail and a verifiable receipt.
