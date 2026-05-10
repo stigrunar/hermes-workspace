@@ -7,6 +7,7 @@ import {
   linkCanonicalTasks,
   loadCanonicalTask,
   resolveCanonicalBoardDbPath,
+  wakeBlockedTaskOnComment,
 } from './swarm-kanban-canonical'
 import { getAssigneeDispatchSupport, readHermesConfig } from './kanban-assignees'
 import { applyMatrixKanbanControl } from './swarm-kanban-control'
@@ -23,6 +24,7 @@ vi.mock('./swarm-kanban-canonical', () => ({
   linkCanonicalTasks: vi.fn(),
   loadCanonicalTask: vi.fn(),
   resolveCanonicalBoardDbPath: vi.fn(() => '/tmp/kanban.db'),
+  wakeBlockedTaskOnComment: vi.fn(() => false),
 }))
 
 vi.mock('./kanban-assignees', () => ({
@@ -134,6 +136,13 @@ describe('applyMatrixKanbanControl', () => {
       ok: true,
       receipt: { action: 'add_comment', taskId: 't_demo' },
     })
+    expect(wakeBlockedTaskOnComment).toHaveBeenCalledWith({
+      dbPath: '/tmp/kanban.db',
+      taskId: 't_demo',
+      actor: 'matrix',
+      mutationId: 'mx_test_1',
+      reason: 'Matrix comment added to blocked task',
+    })
 
     vi.mocked(loadCanonicalTask)
       .mockReturnValueOnce({
@@ -159,6 +168,26 @@ describe('applyMatrixKanbanControl', () => {
     expect(linkResult).toMatchObject({
       ok: true,
       receipt: { action: 'link_parent', taskId: 't_demo' },
+    })
+  })
+
+  it('wakes a blocked task back to ready when Matrix adds operator input', async () => {
+    vi.mocked(wakeBlockedTaskOnComment).mockReturnValue(true)
+    vi.mocked(loadCanonicalTask).mockReturnValue({
+      dbPath: '/tmp/kanban.db',
+      task: { id: 't_demo', title: 'Demo', status: 'blocked', assignee: 'dollycode' },
+    })
+
+    const result = await applyMatrixKanbanControl({
+      action: 'add_comment',
+      taskId: 't_demo',
+      comment: 'The missing input is now here; continue.',
+      actor: 'stig',
+    })
+
+    expect(result).toMatchObject({
+      ok: true,
+      receipt: { action: 'add_comment', taskId: 't_demo', status: 'ready', assignee: 'dollycode' },
     })
   })
 })

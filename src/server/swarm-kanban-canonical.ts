@@ -190,6 +190,39 @@ export function linkCanonicalTasks(input: {
   )
 }
 
+export function wakeBlockedTaskOnComment(input: {
+  dbPath: string
+  taskId: string
+  actor: string
+  mutationId: string
+  reason?: string | null
+}): boolean {
+  const changed = sqliteExec(
+    input.dbPath,
+    [
+      'update tasks set status = \'ready\', current_run_id = NULL',
+      'where id =',
+      sqliteQuote(input.taskId),
+      "and status = 'blocked'",
+      'returning id;',
+    ].join(' '),
+  )
+  if (!changed.trim()) return false
+  appendCanonicalEvent({
+    dbPath: input.dbPath,
+    taskId: input.taskId,
+    kind: 'comment_woke_blocked_task',
+    payload: {
+      mutationId: input.mutationId,
+      actor: input.actor,
+      reason: input.reason ?? null,
+      stateAfter: 'ready',
+      source: 'matrix-comment',
+    },
+  })
+  return true
+}
+
 export function createMutationId(): string {
   return `mx_${randomUUID().replace(/-/g, '').slice(0, 12)}`
 }

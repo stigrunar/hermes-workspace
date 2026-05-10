@@ -6,6 +6,7 @@ import {
   linkCanonicalTasks,
   loadCanonicalTask,
   resolveCanonicalBoardDbPath,
+  wakeBlockedTaskOnComment,
 } from './swarm-kanban-canonical'
 import { getAssigneeDispatchSupport, readHermesConfig } from './kanban-assignees'
 
@@ -276,6 +277,14 @@ export async function applyMatrixKanbanControl(input: MatrixKanbanControlInput):
         kind: 'matrix_comment',
         payload: { mutationId, actor, reason: input.reason ?? null, body },
       })
+      const wokeBlockedTask = wakeBlockedTaskOnComment({
+        dbPath: resolved.dbPath,
+        taskId: input.taskId,
+        actor,
+        mutationId,
+        reason: input.reason ?? 'Matrix comment added to blocked task',
+      })
+      const statusAfter = wokeBlockedTask ? 'ready' : resolved.task.status ?? null
       return {
         ok: true,
         receipt: {
@@ -284,7 +293,7 @@ export async function applyMatrixKanbanControl(input: MatrixKanbanControlInput):
           taskId: input.taskId,
           board: input.board ?? null,
           actor,
-          status: resolved.task.status ?? null,
+          status: statusAfter,
           assignee: resolved.task.assignee ?? null,
           audit: { commentWritten: true, eventWritten: true },
         },
