@@ -18,6 +18,7 @@ type SwarmKanbanCard = {
   status: KanbanLane
   missionId: string | null
   reportPath: string | null
+  latestSummary?: string | null
   createdBy: string
   createdAt: number
   updatedAt: number
@@ -129,6 +130,7 @@ type KanbanTaskDetail = {
   createdBy: string | null
   body: string
   result: string | null
+  latestSummary: string | null
   workspaceKind: string | null
   workspacePath: string | null
   currentRunId: number | null
@@ -867,6 +869,12 @@ export function Swarm2KanbanBoard({
                       </div>
                     ) : null}
                     {card.spec ? <p className="mt-2 line-clamp-3 text-xs leading-relaxed text-[var(--theme-muted-2)]">{card.spec}</p> : null}
+                    {card.latestSummary ? (
+                      <div className="mt-2 rounded-lg border border-emerald-400/30 bg-emerald-500/10 p-2 text-[11px] leading-relaxed text-emerald-800">
+                        <div className="font-semibold uppercase tracking-[0.12em]">Latest handoff</div>
+                        <div className="mt-1 line-clamp-3 whitespace-pre-wrap">{card.latestSummary}</div>
+                      </div>
+                    ) : null}
                     <div className="mt-3 space-y-1 text-[10px] text-[var(--theme-muted)]">
                       <div>Assignee: <span className="font-semibold text-[var(--theme-text)]">{labelForWorker(card.assignedWorker)}</span></div>
                       <div>Profile: <span className="font-semibold text-[var(--theme-text)]">{card.createdBy || '—'}</span></div>

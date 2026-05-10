@@ -44,6 +44,7 @@ export type DashboardKanbanTask = {
   completed_at?: number | null
   workspace_kind?: string | null
   workspace_path?: string | null
+  latest_summary?: string | null
 }
 
 export type DashboardKanbanBoardResponse = {

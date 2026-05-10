@@ -206,6 +206,19 @@ export function parseAcceptanceMetadata(value: unknown): SwarmTaskAcceptance | n
   return next
 }
 
+export function parseAcceptanceText(value: string): SwarmTaskAcceptance | null {
+  const parsed: Partial<Record<AcceptanceField, string>> = {}
+  for (const line of value.split(/\r?\n/)) {
+    const match = line.match(/^\s*([a-z_]+)\s*:\s*(.*?)\s*$/)
+    if (!match) continue
+    const field = match[1] as AcceptanceField
+    if (!ACCEPTANCE_FIELDS.includes(field)) continue
+    const text = match[2]?.trim()
+    if (text) parsed[field] = text
+  }
+  return parseAcceptanceMetadata(parsed)
+}
+
 export function findTaskAcceptance(taskId: string, board?: string | null): SwarmTaskAcceptance | null {
   const resolved = loadCanonicalTask(taskId, board)
   if (!resolved) return null
@@ -241,13 +254,16 @@ export function findTaskAcceptance(taskId: string, board?: string | null): Swarm
   )
   for (const comment of comments) {
     const body = comment.body?.trim() ?? ''
-    if (!body.startsWith(ACCEPTANCE_COMMENT_PREFIX)) continue
-    try {
-      const parsed = parseAcceptanceMetadata(JSON.parse(body.slice(ACCEPTANCE_COMMENT_PREFIX.length)))
-      if (parsed) return parsed
-    } catch {
-      // ignore malformed comment payloads
+    if (body.startsWith(ACCEPTANCE_COMMENT_PREFIX)) {
+      try {
+        const parsed = parseAcceptanceMetadata(JSON.parse(body.slice(ACCEPTANCE_COMMENT_PREFIX.length)))
+        if (parsed) return parsed
+      } catch {
+        // ignore malformed comment payloads
+      }
     }
+    const parsedText = parseAcceptanceText(body)
+    if (parsedText) return parsedText
   }
   return null
 }

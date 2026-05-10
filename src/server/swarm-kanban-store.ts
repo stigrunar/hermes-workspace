@@ -16,6 +16,7 @@ export type SwarmKanbanCard = {
   status: SwarmKanbanLane
   missionId: string | null
   reportPath: string | null
+  latestSummary?: string | null
   createdBy: string
   createdAt: number
   updatedAt: number
@@ -99,6 +100,7 @@ function normalizeCard(card: (Partial<Omit<SwarmKanbanCard, 'status'>> & { id?: 
     status: normalizeStatus(card.status),
     missionId: optionalString(card.missionId),
     reportPath: optionalString(card.reportPath),
+    latestSummary: optionalString(card.latestSummary),
     createdBy: typeof card.createdBy === 'string' && card.createdBy ? card.createdBy : 'swarm2-kanban',
     createdAt: typeof card.createdAt === 'number' ? card.createdAt : now,
     updatedAt: typeof card.updatedAt === 'number' ? card.updatedAt : now,
@@ -127,6 +129,7 @@ export function createSwarmKanbanCard(input: CreateSwarmKanbanCardInput): SwarmK
     status: input.status ?? 'backlog',
     missionId: input.missionId,
     reportPath: input.reportPath,
+    latestSummary: null,
     createdBy: input.createdBy ?? 'swarm2-kanban',
     createdAt: now,
     updatedAt: now,

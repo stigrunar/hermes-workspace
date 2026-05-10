@@ -39,6 +39,13 @@ async function loadQueryModule() {
     ],
   }))
 
+  vi.doMock('node:fs', () => ({
+    existsSync: vi.fn(() => false),
+    readdirSync: vi.fn(() => []),
+  }))
+  vi.doMock('./claude-paths', () => ({
+    getClaudeRoot: vi.fn(() => '/tmp/no-local-kanban'),
+  }))
   vi.doMock('./gateway-capabilities', () => ({
     getCapabilities: vi.fn(() => ({ kanban: true })),
   }))

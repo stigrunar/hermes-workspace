@@ -113,6 +113,7 @@ function dashboardTaskToCard(task: DashboardKanbanTask): SwarmKanbanCard {
     status: mapDashboardStatusToLane(task.status),
     missionId: null,
     reportPath: null,
+    latestSummary: task.latest_summary ?? null,
     createdBy: task.created_by ?? 'hermes-kanban',
     createdAt,
     updatedAt,

@@ -109,6 +109,7 @@ export type SwarmKanbanTaskDetail = {
   createdBy: string | null
   body: string
   result: string | null
+  latestSummary: string | null
   workspaceKind: string | null
   workspacePath: string | null
   currentRunId: number | null
@@ -136,6 +137,7 @@ type SqliteTaskRow = {
   workspace_path?: string | null
   current_run_id?: number | null
   result?: string | null
+  latest_summary?: string | null
 }
 
 type SqliteCommentRow = {
@@ -281,6 +283,7 @@ function sqliteTaskToCard(task: SqliteTaskRow): SwarmKanbanCard {
     status: mapStatusToLane(task.status),
     missionId: null,
     reportPath: null,
+    latestSummary: task.latest_summary ?? task.result ?? null,
     createdBy: task.created_by ?? 'hermes-kanban',
     createdAt: normalizeTimestamp(task.created_at) ?? Date.now(),
     updatedAt:
@@ -522,24 +525,24 @@ export async function listSwarmKanbanBoards(): Promise<Array<SwarmKanbanBoardOpt
 }
 
 async function cardsForBoard(board: SwarmKanbanBoardOption): Promise<Array<SwarmKanbanCardWithBoard>> {
-  if (getCapabilities().kanban) {
-    const response = await fetchDashboardKanbanBoard(board.slug)
-    return response.columns.flatMap((column) => column.tasks.map((task) => withBoardMeta(sqliteTaskToCard(task), board)))
-  }
-
-  if (board.source === 'sqlite') {
-    const dbPath = boardDbPath(board.slug)
-    if (!dbPath) return []
+  const localDbPath = boardDbPath(board.slug)
+  if (localDbPath) {
     const rows = sqliteJson<Array<SqliteTaskRow>>(
-      dbPath,
+      localDbPath,
       [
-        'select id, title, body, assignee, status, created_by, created_at, started_at, completed_at',
+        'select id, title, body, assignee, status, created_by, created_at, started_at, completed_at, result,',
+        "(select summary from task_runs r where r.task_id = tasks.id and r.summary is not null and trim(r.summary) != '' order by coalesce(r.ended_at, r.started_at, 0) desc, r.id desc limit 1) as latest_summary",
         'from tasks',
         'order by coalesce(completed_at, started_at, created_at) desc, id desc;',
       ].join(' '),
     )
-    const doneAudits = doneAuditMapForBoard(dbPath)
+    const doneAudits = doneAuditMapForBoard(localDbPath)
     return rows.map((row) => withBoardMeta(sqliteTaskToCard(row), board, doneAudits.get(row.id) ?? null))
+  }
+
+  if (getCapabilities().kanban) {
+    const response = await fetchDashboardKanbanBoard(board.slug)
+    return response.columns.flatMap((column) => column.tasks.map((task) => withBoardMeta(sqliteTaskToCard(task), board)))
   }
 
   return listSwarmKanbanCards().map((card) => withBoardMeta(card, board))
@@ -600,12 +603,14 @@ export async function getSwarmKanbanTaskDetail(input: {
   taskId: string
 }): Promise<SwarmKanbanTaskDetail | null> {
   const resolved = await resolveBoard(input.board)
+  const detailDbPath = resolved.dbPath ?? boardDbPath(resolved.slug)
 
-  if (resolved.dbPath) {
+  if (detailDbPath) {
     const taskRows = sqliteJson<Array<SqliteTaskRow>>(
-      resolved.dbPath,
+      detailDbPath,
       [
-        'select id, title, body, assignee, status, created_by, created_at, started_at, completed_at, workspace_kind, workspace_path, current_run_id, result',
+        'select id, title, body, assignee, status, created_by, created_at, started_at, completed_at, workspace_kind, workspace_path, current_run_id, result,',
+        "(select summary from task_runs r where r.task_id = tasks.id and r.summary is not null and trim(r.summary) != '' order by coalesce(r.ended_at, r.started_at, 0) desc, r.id desc limit 1) as latest_summary",
         'from tasks',
         `where id = '${input.taskId.replace(/'/g, "''")}'`,
         'limit 1;',
@@ -614,7 +619,7 @@ export async function getSwarmKanbanTaskDetail(input: {
     if (taskRows.length === 0) return null
     const task = taskRows[0]
     const comments = sqliteJson<Array<SqliteCommentRow>>(
-      resolved.dbPath,
+      detailDbPath,
       [
         'select author, body, created_at',
         'from task_comments',
@@ -624,7 +629,7 @@ export async function getSwarmKanbanTaskDetail(input: {
       ].join(' '),
     )
     const recentRuns = sqliteJson<Array<SqliteRunRow>>(
-      resolved.dbPath,
+      detailDbPath,
       [
         'select id, status, outcome, summary, metadata, error, started_at, ended_at',
         'from task_runs',
@@ -634,7 +639,7 @@ export async function getSwarmKanbanTaskDetail(input: {
       ].join(' '),
     )
     const events = sqliteJson<Array<SqliteEventRow>>(
-      resolved.dbPath,
+      detailDbPath,
       [
         'select kind, payload, created_at',
         'from task_events',
@@ -643,7 +648,7 @@ export async function getSwarmKanbanTaskDetail(input: {
         'limit 8;',
       ].join(' '),
     )
-    const doneAudit = doneAuditForTask(resolved.dbPath, task.id, task.status)
+    const doneAudit = doneAuditForTask(detailDbPath, task.id, task.status)
     const controlReceipts = events
       .map((event) => parseControlReceipt(event))
       .filter((event): event is SwarmKanbanControlReceipt => Boolean(event))
@@ -657,6 +662,7 @@ export async function getSwarmKanbanTaskDetail(input: {
       createdBy: task.created_by ?? null,
       body: task.body ?? '',
       result: task.result ?? null,
+      latestSummary: task.latest_summary ?? task.result ?? null,
       workspaceKind: task.workspace_kind ?? null,
       workspacePath: task.workspace_path ?? null,
       currentRunId: task.current_run_id ?? null,
@@ -697,6 +703,7 @@ export async function getSwarmKanbanTaskDetail(input: {
       createdBy: task.created_by ?? null,
       body: task.body ?? '',
       result: null,
+      latestSummary: task.latest_summary ?? null,
       workspaceKind: task.workspace_kind ?? null,
       workspacePath: task.workspace_path ?? null,
       currentRunId: null,
@@ -723,6 +730,7 @@ export async function getSwarmKanbanTaskDetail(input: {
     createdBy: card.createdBy,
     body: card.spec,
     result: null,
+    latestSummary: card.latestSummary ?? null,
     workspaceKind: null,
     workspacePath: SWARM_KANBAN_FILE,
     currentRunId: null,
