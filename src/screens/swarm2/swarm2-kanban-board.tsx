@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
 import { MATRIX_BOARD_LABEL, MATRIX_DEFAULT_BOARD_SLUG } from '@/lib/matrix-branding'
+import { fetchAssignees, type TaskAssignee } from '@/lib/tasks-api'
 
 type KanbanLane = 'backlog' | 'ready' | 'running' | 'review' | 'blocked' | 'done'
 
@@ -30,6 +31,10 @@ type KanbanWorker = {
   id: string
   displayName?: string | null
   role?: string | null
+}
+
+type DispatchableAssignee = TaskAssignee & {
+  dispatchSupported: true
 }
 
 type KanbanBackendMeta = {
@@ -451,6 +456,13 @@ export function Swarm2KanbanBoard({
     staleTime: 2_000,
   })
 
+  const assigneesQuery = useQuery({
+    queryKey: ['swarm2', 'kanban', 'assignees'],
+    queryFn: fetchAssignees,
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
+  })
+
   const backend = query.data?.backend ?? null
   const backendPresentation = useMemo(() => getKanbanBackendPresentation(backend), [backend])
   const selectedBoard = query.data?.selectedBoard
@@ -490,17 +502,39 @@ export function Swarm2KanbanBoard({
   const blockedCount = cardsByLane.get('blocked')?.length ?? 0
   const doneWithFollowUpCount = (cardsByLane.get('done') ?? []).filter((card) => (card.doneAudit?.openChildCount ?? 0) > 0).length
   const doneMissingEvidenceCount = (cardsByLane.get('done') ?? []).filter((card) => doneAuditLacksEvidence(card.doneAudit)).length
+  const supportedAssignees = useMemo(
+    () => (assigneesQuery.data?.assignees ?? []).filter((assignee): assignee is DispatchableAssignee => assignee.dispatchSupported === true),
+    [assigneesQuery.data?.assignees],
+  )
+  const unsupportedAssigneeMap = useMemo(
+    () => new Map((assigneesQuery.data?.unsupportedAssignees ?? []).map((assignee) => [assignee.id, assignee] as const)),
+    [assigneesQuery.data?.unsupportedAssignees],
+  )
+  const assigneeLabelMap = useMemo(
+    () => new Map(
+      [
+        ...(assigneesQuery.data?.assignees ?? []),
+        ...(assigneesQuery.data?.unsupportedAssignees ?? []),
+      ].map((assignee) => [assignee.id, assignee.label] as const),
+    ),
+    [assigneesQuery.data?.assignees, assigneesQuery.data?.unsupportedAssignees],
+  )
+  const labelForWorker = (workerId: string | null) => {
+    if (!workerId) return 'Unassigned'
+    return assigneeLabelMap.get(workerId) ?? workerLabel(workers, workerId)
+  }
   const detail = detailQuery.data ?? null
+  const unsupportedCurrentAssignee = detail?.assignee ? unsupportedAssigneeMap.get(detail.assignee) ?? null : null
   const acceptanceMissingFields = getAcceptanceMissingFields(detail?.acceptance)
   const latestReceipt = latestDispatchReceipt(detail?.controlReceipts)
   const controlState = getKanbanControlState(detail)
   const mutableBoard = (selectedBoard?.slug ?? requestedBoard) === ALL_BOARDS_SLUG ? MATRIX_DEFAULT_BOARD_SLUG : (selectedBoard?.slug ?? requestedBoard)
   const claimEvidence = taskHasClaimEvidence(detail)
-  const canEditTask = !readOnly && Boolean(detail) && detail.lane !== 'done'
+  const canEditTask = !readOnly && Boolean(detail) && detail?.lane !== 'done'
   const canAssignWorker = canEditTask && !claimEvidence
   const canMarkReady = canEditTask && !claimEvidence && detail?.lane !== 'ready'
   const canMarkBlocked = canEditTask && detail?.lane !== 'blocked'
-  const canDispatch = !readOnly && Boolean(detail) && detail?.lane === 'ready' && !claimEvidence && Boolean(detail?.assignee?.trim()) && taskHasUsableScope(detail)
+  const canDispatch = !readOnly && Boolean(detail) && detail?.lane === 'ready' && !claimEvidence && Boolean(detail?.assignee?.trim()) && !unsupportedCurrentAssignee && taskHasUsableScope(detail)
   const canReclaim = !readOnly && Boolean(detail) && !claimEvidence
 
   useEffect(() => {
@@ -720,9 +754,9 @@ export function Swarm2KanbanBoard({
                 className="w-full rounded-xl border border-[var(--theme-border)] bg-[var(--theme-card)] px-3 py-2 text-sm text-[var(--theme-text)] outline-none"
               >
                 <option value="">Unassigned</option>
-                {workers.map((worker) => (
-                  <option key={worker.id} value={worker.id}>
-                    {workerLabel(workers, worker.id)}
+                {supportedAssignees.map((assignee) => (
+                  <option key={assignee.id} value={assignee.id}>
+                    {assignee.label}
                   </option>
                 ))}
               </select>
@@ -834,7 +868,7 @@ export function Swarm2KanbanBoard({
                     ) : null}
                     {card.spec ? <p className="mt-2 line-clamp-3 text-xs leading-relaxed text-[var(--theme-muted-2)]">{card.spec}</p> : null}
                     <div className="mt-3 space-y-1 text-[10px] text-[var(--theme-muted)]">
-                      <div>Assignee: <span className="font-semibold text-[var(--theme-text)]">{workerLabel(workers, card.assignedWorker)}</span></div>
+                      <div>Assignee: <span className="font-semibold text-[var(--theme-text)]">{labelForWorker(card.assignedWorker)}</span></div>
                       <div>Profile: <span className="font-semibold text-[var(--theme-text)]">{card.createdBy || '—'}</span></div>
                       <div>Updated: <span className="font-semibold text-[var(--theme-text)]">{formatTimestamp(card.updatedAt)}</span></div>
                       {card.reportPath ? <div className="truncate" title={card.reportPath}>Report: {card.reportPath}</div> : null}
@@ -842,7 +876,7 @@ export function Swarm2KanbanBoard({
                     <div className="mt-3 flex flex-wrap gap-1.5">
                       {card.assignedWorker ? (
                         <span className="rounded-full border border-[var(--theme-border)] px-2 py-1 text-[10px] font-semibold text-[var(--theme-muted)]">
-                          Open {workerLabel(workers, card.assignedWorker)}
+                          Open {labelForWorker(card.assignedWorker)}
                         </span>
                       ) : null}
                       <span className="rounded-full border border-[var(--theme-accent)] bg-[var(--theme-accent-soft)] px-2 py-1 text-[10px] font-semibold text-[var(--theme-accent-strong)]">
@@ -905,7 +939,12 @@ export function Swarm2KanbanBoard({
                   </div>
                   <div className="rounded-2xl border border-[var(--theme-border)] bg-[var(--theme-bg)] p-3 text-xs">
                     <div className="text-[10px] uppercase tracking-[0.16em] text-[var(--theme-muted)]">Assignee</div>
-                    <div className="mt-1 font-semibold text-[var(--theme-text)]">{workerLabel(workers, detail.assignee)}</div>
+                    <div className="mt-1 font-semibold text-[var(--theme-text)]">{labelForWorker(detail.assignee)}</div>
+                    {unsupportedCurrentAssignee ? (
+                      <div className="mt-2 rounded-xl border border-amber-400/40 bg-amber-500/10 px-2 py-1.5 text-[11px] leading-relaxed text-amber-700">
+                        Dispatch disabled: {unsupportedCurrentAssignee.dispatchReason ?? `Assignee ${unsupportedCurrentAssignee.id} is not dispatchable from The Matrix.`}
+                      </div>
+                    ) : null}
                   </div>
                   <div className="rounded-2xl border border-[var(--theme-border)] bg-[var(--theme-bg)] p-3 text-xs">
                     <div className="text-[10px] uppercase tracking-[0.16em] text-[var(--theme-muted)]">Owner/Profile</div>
@@ -996,8 +1035,8 @@ export function Swarm2KanbanBoard({
                           <span className="font-semibold text-[var(--theme-text)]">Assignee</span>
                           <select value={assignWorkerId} onChange={(event) => setAssignWorkerId(event.target.value)} className="w-full rounded-xl border border-[var(--theme-border)] bg-[var(--theme-bg)] px-3 py-2 text-sm text-[var(--theme-text)] outline-none">
                             <option value="">Unassigned</option>
-                            {workers.map((worker) => (
-                              <option key={worker.id} value={worker.id}>{workerLabel(workers, worker.id)}</option>
+                            {supportedAssignees.map((assignee) => (
+                              <option key={assignee.id} value={assignee.id}>{assignee.label}</option>
                             ))}
                           </select>
                         </label>
@@ -1005,7 +1044,7 @@ export function Swarm2KanbanBoard({
                           <button
                             type="button"
                             disabled={!canAssignWorker || pendingAction === 'assign_task'}
-                            onClick={() => runControlAction({ action: 'assign_task', board: detail.board, taskId: detail.id, assignedWorker: assignWorkerId || null, reason: actionReason.trim() || undefined }, assignWorkerId ? `Assigned ${workerLabel(workers, assignWorkerId)}` : 'Task unassigned', selectedTask)}
+                            onClick={() => runControlAction({ action: 'assign_task', board: detail.board, taskId: detail.id, assignedWorker: assignWorkerId || null, reason: actionReason.trim() || undefined }, assignWorkerId ? `Assigned ${labelForWorker(assignWorkerId)}` : 'Task unassigned', selectedTask)}
                             className="rounded-full border border-[var(--theme-accent)] bg-[var(--theme-accent-soft)] px-3 py-1.5 text-xs font-semibold text-[var(--theme-accent-strong)] disabled:cursor-not-allowed disabled:opacity-50"
                           >
                             Assign worker
@@ -1069,8 +1108,8 @@ export function Swarm2KanbanBoard({
                           <span className="font-semibold text-[var(--theme-text)]">New assignee</span>
                           <select value={reassignWorkerId} onChange={(event) => setReassignWorkerId(event.target.value)} className="w-full rounded-xl border border-[var(--theme-border)] bg-[var(--theme-bg)] px-3 py-2 text-sm text-[var(--theme-text)] outline-none">
                             <option value="">Choose worker</option>
-                            {workers.map((worker) => (
-                              <option key={worker.id} value={worker.id}>{workerLabel(workers, worker.id)}</option>
+                            {supportedAssignees.map((assignee) => (
+                              <option key={assignee.id} value={assignee.id}>{assignee.label}</option>
                             ))}
                           </select>
                         </label>
@@ -1085,7 +1124,7 @@ export function Swarm2KanbanBoard({
                         <button
                           type="button"
                           disabled={!canReclaim || !reassignWorkerId.trim() || !reassignReason.trim() || pendingAction === 'reassign_worker'}
-                          onClick={() => runControlAction({ action: 'reassign_worker', board: detail.board, taskId: detail.id, assignedWorker: reassignWorkerId.trim(), reason: reassignReason.trim() }, `Reassigned to ${workerLabel(workers, reassignWorkerId.trim())}`, selectedTask)}
+                          onClick={() => runControlAction({ action: 'reassign_worker', board: detail.board, taskId: detail.id, assignedWorker: reassignWorkerId.trim(), reason: reassignReason.trim() }, `Reassigned to ${labelForWorker(reassignWorkerId.trim())}`, selectedTask)}
                           className="rounded-full border border-[var(--theme-accent)] bg-[var(--theme-accent-soft)] px-3 py-1.5 text-xs font-semibold text-[var(--theme-accent-strong)] disabled:cursor-not-allowed disabled:opacity-50"
                         >
                           Reassign worker

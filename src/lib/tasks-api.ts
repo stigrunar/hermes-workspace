@@ -35,10 +35,13 @@ export type TaskAssignee = {
   id: string
   label: string
   isHuman: boolean
+  dispatchSupported?: boolean
+  dispatchReason?: string | null
 }
 
 export type AssigneesResponse = {
   assignees: Array<TaskAssignee>
+  unsupportedAssignees?: Array<TaskAssignee>
   humanReviewer: string | null
 }
 

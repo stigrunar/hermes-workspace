@@ -8,6 +8,7 @@ import {
   loadCanonicalTask,
   resolveCanonicalBoardDbPath,
 } from './swarm-kanban-canonical'
+import { getAssigneeDispatchSupport, readHermesConfig } from './kanban-assignees'
 import { applyMatrixKanbanControl } from './swarm-kanban-control'
 
 vi.mock('./kanban-backend', () => ({
@@ -24,8 +25,18 @@ vi.mock('./swarm-kanban-canonical', () => ({
   resolveCanonicalBoardDbPath: vi.fn(() => '/tmp/kanban.db'),
 }))
 
+vi.mock('./kanban-assignees', () => ({
+  getAssigneeDispatchSupport: vi.fn(),
+  readHermesConfig: vi.fn(() => ({ tasks: { human_reviewer: 'reviewer' } })),
+}))
+
 beforeEach(() => {
   vi.resetAllMocks()
+  vi.mocked(readHermesConfig).mockReturnValue({ tasks: { human_reviewer: 'reviewer' } })
+  vi.mocked(getAssigneeDispatchSupport).mockReturnValue({
+    dispatchSupported: true,
+    dispatchReason: null,
+  })
   vi.mocked(loadCanonicalTask).mockReturnValue({
     dbPath: '/tmp/kanban.db',
     task: {
@@ -52,6 +63,27 @@ describe('applyMatrixKanbanControl', () => {
       error: expect.stringContaining('Direct running status is not allowed'),
     })
     expect(createKanbanCard).not.toHaveBeenCalled()
+  })
+
+  it('rejects unsupported assignees before mutating canonical tasks', async () => {
+    vi.mocked(getAssigneeDispatchSupport).mockReturnValue({
+      dispatchSupported: false,
+      dispatchReason: 'Profile "workspace" has no configured model, so Matrix cannot dispatch it as a Kanban worker.',
+    })
+
+    const result = await applyMatrixKanbanControl({
+      action: 'create_task',
+      title: 'Needs real worker',
+      assignedWorker: 'workspace',
+    })
+
+    expect(result).toEqual({
+      ok: false,
+      status: 409,
+      error: 'Profile "workspace" has no configured model, so Matrix cannot dispatch it as a Kanban worker.',
+    })
+    expect(createKanbanCard).not.toHaveBeenCalled()
+    expect(updateKanbanCard).not.toHaveBeenCalled()
   })
 
   it('returns explicit receipts for allowed safe status moves', async () => {

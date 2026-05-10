@@ -18,6 +18,7 @@ import {
   findTaskAcceptance,
   loadCanonicalTask,
 } from '../../server/swarm-kanban-canonical'
+import { getAssigneeDispatchSupport, readHermesConfig } from '../../server/kanban-assignees'
 
 const HERMES_BIN_CANDIDATES = [
   process.env.HERMES_CLI_BIN,
@@ -965,6 +966,20 @@ function parseReason(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null
 }
 
+function configuredHumanReviewer(): string | null {
+  const config = readHermesConfig()
+  const tasksConfig = (config.tasks ?? {}) as Record<string, unknown>
+  const reviewer = typeof tasksConfig.human_reviewer === 'string' ? tasksConfig.human_reviewer.trim() : ''
+  return reviewer || null
+}
+
+function unsupportedAssigneeError(workerId: string): string {
+  const support = getAssigneeDispatchSupport(workerId, configuredHumanReviewer())
+  return support.dispatchReason
+    ? `Unsupported canonical assignee "${workerId}": ${support.dispatchReason}`
+    : `Unsupported canonical assignee "${workerId}".`
+}
+
 function taskPromptFromCanonicalTask(task: { title: string; body?: string | null }): string {
   const body = task.body?.trim() ?? ''
   return body ? `${task.title}\n\n${body}` : task.title
@@ -1032,6 +1047,10 @@ export const Route = createFileRoute('/api/swarm-dispatch' as never)({
           const assignee = canonical.task.assignee?.trim()
           if (!assignee || !validateWorkerId(assignee)) {
             return json({ error: 'Task-bound dispatch requires a valid canonical assignee' }, { status: 409 })
+          }
+          const support = getAssigneeDispatchSupport(assignee, configuredHumanReviewer())
+          if (!support.dispatchSupported) {
+            return json({ error: unsupportedAssigneeError(assignee) }, { status: 409 })
           }
           if (!canonicalTaskHasUsableScope(canonical.task)) {
             return json({ error: 'Task-bound dispatch requires canonical task title/body scope' }, { status: 409 })

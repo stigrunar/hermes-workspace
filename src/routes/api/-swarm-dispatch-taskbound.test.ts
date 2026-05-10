@@ -10,6 +10,7 @@ import {
   loadCanonicalTask,
   writeTaskAcceptance,
 } from '../../server/swarm-kanban-canonical'
+import { getAssigneeDispatchSupport, readHermesConfig } from '../../server/kanban-assignees'
 import { Route } from './swarm-dispatch'
 
 vi.mock('../../server/auth-middleware', () => ({ isAuthenticated: vi.fn() }))
@@ -37,6 +38,10 @@ vi.mock('../../server/swarm-kanban-canonical', () => ({
   loadCanonicalTask: vi.fn(),
   parseAcceptanceMetadata: vi.fn((value: unknown) => value),
   writeTaskAcceptance: vi.fn(),
+}))
+vi.mock('../../server/kanban-assignees', () => ({
+  getAssigneeDispatchSupport: vi.fn(),
+  readHermesConfig: vi.fn(() => ({ tasks: { human_reviewer: 'reviewer' } })),
 }))
 vi.mock('node:fs', async () => {
   const actual = await vi.importActual<typeof import('node:fs')>('node:fs')
@@ -71,6 +76,11 @@ const handlers = (Route as RouteWithHandlers).options.server.handlers
 beforeEach(() => {
   vi.resetAllMocks()
   vi.mocked(isAuthenticated).mockReturnValue(true)
+  vi.mocked(readHermesConfig).mockReturnValue({ tasks: { human_reviewer: 'reviewer' } })
+  vi.mocked(getAssigneeDispatchSupport).mockReturnValue({
+    dispatchSupported: true,
+    dispatchReason: null,
+  })
   vi.mocked(rosterByWorkerId).mockReturnValue(new Map())
   vi.mocked(loadCanonicalTask).mockReturnValue({
     dbPath: '/tmp/kanban.db',
@@ -90,6 +100,39 @@ describe('/api/swarm-dispatch task-bound policy', () => {
 
     expect(res.status).toBe(400)
     expect(await res.json()).toEqual({ error: 'dispatch without taskId fails' })
+  })
+
+  it('rejects unsupported canonical assignees before writing dispatch receipts', async () => {
+    vi.mocked(loadCanonicalTask).mockReturnValue({
+      dbPath: '/tmp/kanban.db',
+      task: { id: 't_demo', title: 'Demo', body: 'Spec', assignee: 'workspace', status: 'ready' },
+    })
+    vi.mocked(getAssigneeDispatchSupport).mockReturnValue({
+      dispatchSupported: false,
+      dispatchReason: 'Profile "workspace" has no configured model, so Matrix cannot dispatch it as a Kanban worker.',
+    })
+
+    const res = await handlers.POST({
+      request: new Request('http://localhost/api/swarm-dispatch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          taskId: 't_demo',
+          board: 'mission-control',
+          reason: 'Matrix request',
+          waitForCheckpoint: false,
+          allowAsync: true,
+        }),
+      }),
+    })
+
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({
+      error: 'Unsupported canonical assignee "workspace": Profile "workspace" has no configured model, so Matrix cannot dispatch it as a Kanban worker.',
+    })
+    expect(createOrUpdateMission).not.toHaveBeenCalled()
+    expect(appendCanonicalComment).not.toHaveBeenCalled()
+    expect(appendCanonicalEvent).not.toHaveBeenCalled()
   })
 
   it('allows task-bound dispatch before specialist acceptance and keeps request acceptance non-canonical', async () => {
