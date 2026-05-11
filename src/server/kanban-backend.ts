@@ -22,6 +22,19 @@ import {
 
 export type KanbanBackendId = 'local' | 'claude' | 'hermes-proxy'
 
+export type MatrixControlPlaneContract = {
+  owner: 'the-matrix'
+  role: 'control-plane'
+  nativeKanbanRole: 'execution-storage'
+  mutationEndpoint: '/api/swarm-kanban-control'
+  dispatchEndpoint: '/api/swarm-dispatch'
+  completionOwner: 'worker-kanban-complete'
+  storage: 'hermes-kanban' | 'local-fallback'
+  execution: 'hermes-kanban-dispatcher' | 'local-only'
+  legacyMutationEndpointWritable: boolean
+  warnings: string[]
+}
+
 export type KanbanBackendMeta = {
   id: KanbanBackendId
   label: string
@@ -29,6 +42,28 @@ export type KanbanBackendMeta = {
   writable: boolean
   details?: string | null
   path?: string | null
+  controlPlane: MatrixControlPlaneContract
+}
+
+
+function matrixControlPlaneContract(input: {
+  storage: MatrixControlPlaneContract['storage']
+  execution: MatrixControlPlaneContract['execution']
+  legacyMutationEndpointWritable?: boolean
+  warnings?: string[]
+}): MatrixControlPlaneContract {
+  return {
+    owner: 'the-matrix',
+    role: 'control-plane',
+    nativeKanbanRole: 'execution-storage',
+    mutationEndpoint: '/api/swarm-kanban-control',
+    dispatchEndpoint: '/api/swarm-dispatch',
+    completionOwner: 'worker-kanban-complete',
+    storage: input.storage,
+    execution: input.execution,
+    legacyMutationEndpointWritable: input.legacyMutationEndpointWritable === true,
+    warnings: input.warnings ?? [],
+  }
 }
 
 type KanbanBackend = {
@@ -327,7 +362,12 @@ const localBackend: KanbanBackend = {
       detected: true,
       writable: true,
       path: SWARM_KANBAN_FILE,
-      details: 'Using local Swarm board JSON store.',
+      details: 'Using local Swarm board JSON store. Matrix remains the control plane, but this fallback has no Hermes dispatcher.',
+      controlPlane: matrixControlPlaneContract({
+        storage: 'local-fallback',
+        execution: 'local-only',
+        warnings: ['Local fallback is cockpit-only; no Hermes worker dispatch is available from this backend.'],
+      }),
     }
   },
   list() {
@@ -353,6 +393,11 @@ const claudeBackend: KanbanBackend = {
       details: detection.available
         ? detection.reason ?? `Hermes Kanban storage detected (${detection.cliPath ?? 'direct sqlite'}, ${detection.dbPath})`
         : detection.reason ?? 'Hermes Kanban not detected.',
+      controlPlane: matrixControlPlaneContract({
+        storage: 'hermes-kanban',
+        execution: 'hermes-kanban-dispatcher',
+        warnings: detection.reason ? [detection.reason] : [],
+      }),
     }
   },
   list() {
@@ -429,6 +474,10 @@ const dashboardProxyBackend: KanbanBackend = {
       details: caps.kanban
         ? `Synced with the Hermes Dashboard kanban plugin at ${caps.dashboard.url}/kanban (single SQLite source of truth, dispatcher-aware).`
         : 'Hermes Dashboard kanban plugin not detected.',
+      controlPlane: matrixControlPlaneContract({
+        storage: 'hermes-kanban',
+        execution: 'hermes-kanban-dispatcher',
+      }),
     }
   },
   async list() {

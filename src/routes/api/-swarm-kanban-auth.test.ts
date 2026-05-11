@@ -15,13 +15,32 @@ vi.mock('../../server/auth-middleware', () => ({
 
 vi.mock('../../server/kanban-backend', () => ({
   createKanbanCard: vi.fn(),
-  getKanbanBackendMeta: vi.fn(() => ({ id: 'hermes-proxy', label: 'Hermes Dashboard', detected: true, writable: true })),
+  getKanbanBackendMeta: vi.fn(() => BACKEND_META),
   updateKanbanCard: vi.fn(),
 }))
 
 vi.mock('../../server/swarm-kanban-query', () => ({
   querySwarmKanbanBoard: vi.fn(),
 }))
+
+const BACKEND_META = {
+  id: 'hermes-proxy' as const,
+  label: 'Hermes Dashboard',
+  detected: true,
+  writable: true,
+  controlPlane: {
+    owner: 'the-matrix' as const,
+    role: 'control-plane' as const,
+    nativeKanbanRole: 'execution-storage' as const,
+    mutationEndpoint: '/api/swarm-kanban-control' as const,
+    dispatchEndpoint: '/api/swarm-dispatch' as const,
+    completionOwner: 'worker-kanban-complete' as const,
+    storage: 'hermes-kanban' as const,
+    execution: 'hermes-kanban-dispatcher' as const,
+    legacyMutationEndpointWritable: false,
+    warnings: [],
+  },
+}
 
 type RouteWithHandlers = typeof Route & {
   options: {
@@ -39,10 +58,10 @@ const handlers = (Route as RouteWithHandlers).options.server.handlers
 
 beforeEach(() => {
   vi.resetAllMocks()
-  vi.mocked(getKanbanBackendMeta).mockReturnValue({ id: 'hermes-proxy', label: 'Hermes Dashboard', detected: true, writable: true })
+  vi.mocked(getKanbanBackendMeta).mockReturnValue(BACKEND_META)
   vi.mocked(querySwarmKanbanBoard).mockResolvedValue({
     cards: [],
-    backend: { id: 'hermes-proxy', label: 'Hermes Dashboard', detected: true, writable: true },
+    backend: BACKEND_META,
     boards: [{ slug: 'mission-control', label: 'The Matrix', description: null, available: true, current: true, source: 'dashboard' }],
     selectedBoard: { requested: 'mission-control', slug: 'mission-control', label: 'The Matrix', description: null, fallback: false },
     readOnly: true,
@@ -118,7 +137,7 @@ describe('/api/swarm-kanban auth boundary', () => {
           doneAudit: null,
         },
       ],
-      backend: { id: 'hermes-proxy', label: 'Hermes Dashboard', detected: true, writable: true },
+      backend: BACKEND_META,
       boards: [{ slug: 'mission-control', label: 'The Matrix', description: null, available: true, current: true, source: 'dashboard' }],
       selectedBoard: { requested: 'matrix', slug: 'mission-control', label: 'The Matrix', description: null, fallback: false },
       readOnly: true,
@@ -134,14 +153,14 @@ describe('/api/swarm-kanban auth boundary', () => {
     expect(await res.json()).toMatchObject({
       ok: true,
       readOnly: true,
-      backend: { id: 'hermes-proxy', label: 'Hermes Dashboard', detected: true, writable: true },
+      backend: BACKEND_META,
       selectedBoard: { slug: 'mission-control', label: 'The Matrix' },
       cards: [{ id: 't_demo', title: 'Demo', status: 'ready' }],
       taskDetail: { id: 't_demo', workspacePath: '/tmp/work' },
     })
   })
 
-  it('rejects direct POST to done so Matrix cannot bypass worker completion evidence', async () => {
+  it('rejects legacy direct POST mutations so Matrix remains the control plane', async () => {
     vi.mocked(isAuthenticated).mockReturnValue(true)
 
     const res = await handlers.POST({
@@ -153,11 +172,11 @@ describe('/api/swarm-kanban auth boundary', () => {
     })
 
     expect(res.status).toBe(409)
-    expect(await res.json()).toMatchObject({ ok: false, error: expect.stringContaining('Direct done status is not allowed') })
+    expect(await res.json()).toMatchObject({ ok: false, error: expect.stringContaining('The Matrix is the control plane'), backend: { controlPlane: { mutationEndpoint: '/api/swarm-kanban-control' } } })
     expect(createKanbanCard).not.toHaveBeenCalled()
   })
 
-  it('rejects direct PATCH to done so Matrix cannot bypass worker completion evidence', async () => {
+  it('rejects legacy direct PATCH mutations so Matrix remains the control plane', async () => {
     vi.mocked(isAuthenticated).mockReturnValue(true)
 
     const res = await handlers.PATCH({
@@ -169,7 +188,7 @@ describe('/api/swarm-kanban auth boundary', () => {
     })
 
     expect(res.status).toBe(409)
-    expect(await res.json()).toMatchObject({ ok: false, error: expect.stringContaining('worker/kanban_complete') })
+    expect(await res.json()).toMatchObject({ ok: false, error: expect.stringContaining('/api/swarm-kanban-control'), backend: { controlPlane: { legacyMutationEndpointWritable: false } } })
     expect(updateKanbanCard).not.toHaveBeenCalled()
   })
 })

@@ -1,32 +1,13 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { json } from '@tanstack/react-start'
-import { z } from 'zod'
-import { createKanbanCard, getKanbanBackendMeta, updateKanbanCard } from '../../server/kanban-backend'
+import { getKanbanBackendMeta } from '../../server/kanban-backend'
 import { isAuthenticated } from '../../server/auth-middleware'
 import { querySwarmKanbanBoard } from '../../server/swarm-kanban-query'
 
-const CreateCardSchema = z.object({
-  title: z.string().trim().min(1).max(200),
-  spec: z.string().trim().max(5000).optional().default(''),
-  acceptanceCriteria: z.string().trim().max(5000).optional().default(''),
-  assignedWorker: z.string().trim().max(120).optional().nullable(),
-  reviewer: z.string().trim().max(120).optional().nullable(),
-  status: z.enum(['backlog', 'ready', 'running', 'review', 'blocked', 'done']).optional().default('backlog'),
-  missionId: z.string().trim().max(200).optional().nullable(),
-  reportPath: z.string().trim().max(500).optional().nullable(),
-  createdBy: z.string().trim().max(120).optional().default('aurora'),
-})
+const LEGACY_MUTATION_ERROR = 'The Matrix is the control plane for Kanban mutations. Use /api/swarm-kanban-control for create/edit/assign/ready/block/comment/link actions, /api/swarm-dispatch for worker claim/spawn, and worker kanban_complete for done.'
 
-const UpdateCardSchema = CreateCardSchema.partial().extend({
-  id: z.string().trim().min(1),
-})
-
-const DIRECT_DONE_ERROR = 'Direct done status is not allowed from The Matrix. Complete it through the worker/kanban_complete path so evidence, handoff, and follow-up semantics are preserved.'
-
-function rejectDirectDone(status: unknown): Response | null {
-  return status === 'done'
-    ? json({ ok: false, error: DIRECT_DONE_ERROR }, { status: 409 })
-    : null
+function rejectLegacyMutation(): Response {
+  return json({ ok: false, error: LEGACY_MUTATION_ERROR, backend: getKanbanBackendMeta() }, { status: 409 })
 }
 
 export const Route = createFileRoute('/api/swarm-kanban' as never)({
@@ -54,70 +35,13 @@ export const Route = createFileRoute('/api/swarm-kanban' as never)({
         if (!isAuthenticated(request)) {
           return json({ ok: false, error: 'Unauthorized' }, { status: 401 })
         }
-        let body: unknown
-        try {
-          body = await request.json()
-        } catch {
-          return json({ ok: false, error: 'Invalid JSON' }, { status: 400 })
-        }
-        const parsed = CreateCardSchema.safeParse(body)
-        if (!parsed.success) {
-          return json({ ok: false, error: parsed.error.issues.map((issue) => issue.message).join('; ') }, { status: 400 })
-        }
-        const directDoneResponse = rejectDirectDone(parsed.data.status)
-        if (directDoneResponse) return directDoneResponse
-        const card = await createKanbanCard({
-          title: parsed.data.title,
-          spec: parsed.data.spec,
-          acceptanceCriteria: parsed.data.acceptanceCriteria
-            ? parsed.data.acceptanceCriteria
-                .split('\n')
-                .map((line) => line.replace(/^[-*]\s*/, '').trim())
-                .filter(Boolean)
-            : [],
-          assignedWorker: parsed.data.assignedWorker,
-          reviewer: parsed.data.reviewer,
-          status: parsed.data.status,
-          missionId: parsed.data.missionId,
-          reportPath: parsed.data.reportPath,
-          createdBy: parsed.data.createdBy,
-        })
-        return json({ ok: true, card, backend: getKanbanBackendMeta() })
+        return rejectLegacyMutation()
       },
       PATCH: async ({ request }) => {
         if (!isAuthenticated(request)) {
           return json({ ok: false, error: 'Unauthorized' }, { status: 401 })
         }
-        let body: unknown
-        try {
-          body = await request.json()
-        } catch {
-          return json({ ok: false, error: 'Invalid JSON' }, { status: 400 })
-        }
-        const parsed = UpdateCardSchema.safeParse(body)
-        if (!parsed.success) {
-          return json({ ok: false, error: parsed.error.issues.map((issue) => issue.message).join('; ') }, { status: 400 })
-        }
-        const directDoneResponse = rejectDirectDone(parsed.data.status)
-        if (directDoneResponse) return directDoneResponse
-        const { id, ...updates } = parsed.data
-        const card = await updateKanbanCard(id, {
-          title: updates.title,
-          spec: updates.spec,
-          acceptanceCriteria: updates.acceptanceCriteria
-            ? updates.acceptanceCriteria
-                .split('\n')
-                .map((line) => line.replace(/^[-*]\s*/, '').trim())
-                .filter(Boolean)
-            : undefined,
-          assignedWorker: updates.assignedWorker,
-          reviewer: updates.reviewer,
-          status: updates.status,
-          missionId: updates.missionId,
-          reportPath: updates.reportPath,
-        })
-        if (!card) return json({ ok: false, error: 'Card not found' }, { status: 404 })
-        return json({ ok: true, card, backend: getKanbanBackendMeta() })
+        return rejectLegacyMutation()
       },
     },
   },

@@ -38,6 +38,19 @@ type DispatchableAssignee = TaskAssignee & {
   dispatchSupported: true
 }
 
+type MatrixControlPlaneContract = {
+  owner: 'the-matrix'
+  role: 'control-plane'
+  nativeKanbanRole: 'execution-storage'
+  mutationEndpoint: '/api/swarm-kanban-control'
+  dispatchEndpoint: '/api/swarm-dispatch'
+  completionOwner: 'worker-kanban-complete'
+  storage: 'hermes-kanban' | 'local-fallback'
+  execution: 'hermes-kanban-dispatcher' | 'local-only'
+  legacyMutationEndpointWritable: boolean
+  warnings: Array<string>
+}
+
 type KanbanBackendMeta = {
   id: 'local' | 'claude' | 'hermes-proxy'
   label: string
@@ -45,6 +58,7 @@ type KanbanBackendMeta = {
   writable: boolean
   details?: string | null
   path?: string | null
+  controlPlane?: MatrixControlPlaneContract
 }
 
 type KanbanBoardOption = {
@@ -196,7 +210,7 @@ export function getKanbanBackendPresentation(backend: KanbanBackendMeta | null |
       badgeLabel: 'Synced • Hermes',
       badgeTone: 'hermes-proxy',
       toastTitle: 'Synced with Hermes Dashboard',
-      toastBody: 'Board data is coming from the Hermes kanban plugin. The Matrix selector will fall back safely if a named board is missing.',
+      toastBody: 'The Matrix is the control plane. Hermes Kanban is the execution/storage layer, and mutations go through bounded Matrix controls.',
       title: backend.details ?? backend.path ?? 'Hermes Dashboard kanban plugin detected',
       dashboardUrl,
     }
@@ -206,7 +220,7 @@ export function getKanbanBackendPresentation(backend: KanbanBackendMeta | null |
       badgeLabel: 'Shared board',
       badgeTone: 'claude',
       toastTitle: 'Board connected',
-      toastBody: 'Board data is coming from the canonical Hermes SQLite store.',
+      toastBody: 'The Matrix is the control plane. The canonical Hermes SQLite store remains the execution/storage layer.',
       title: backend.details ?? backend.path ?? 'Canonical Kanban store detected',
     }
   }
@@ -731,7 +745,7 @@ export function Swarm2KanbanBoard({
               <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--theme-muted)]">Bounded controls</div>
               <div className="mt-1 text-sm font-semibold text-[var(--theme-text)]">Create task</div>
               <p className="mt-1 max-w-3xl text-xs leading-relaxed text-[var(--theme-muted-2)]">
-                Matrix can create, edit, assign, mark ready/blocked, comment, dispatch, reclaim, and reassign. Direct running, review, terminal, and done controls stay worker-owned and unavailable here.
+                Matrix is the control plane: create, edit, assign, mark ready/blocked, comment, dispatch, reclaim, and reassign go through bounded Matrix receipts. Hermes Kanban remains execution/storage; direct running, review, terminal, and done stay worker-owned.
               </p>
             </div>
             <span className="rounded-full border border-[var(--theme-border)] px-2 py-1 text-[10px] uppercase tracking-[0.14em] text-[var(--theme-muted)]">
