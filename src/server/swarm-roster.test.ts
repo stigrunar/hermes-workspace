@@ -7,7 +7,7 @@ import {
 
 describe('swarm identity helpers', () => {
   it('formats display names with ids for swarm roster cards', () => {
-    expect(formatSwarmIdentity('Mirror', 'swarm3')).toBe('Mirror · swarm3')
+    expect(formatSwarmIdentity('Control Mirror', 'swarm3')).toBe('Control Mirror · swarm3')
     expect(formatSwarmIdentity('', 'swarm8')).toBe('Swarm8 · swarm8')
   })
 

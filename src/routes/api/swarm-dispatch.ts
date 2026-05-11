@@ -18,7 +18,7 @@ import {
   findTaskAcceptance,
   loadCanonicalTask,
 } from '../../server/swarm-kanban-canonical'
-import { getAssigneeDispatchSupport, readHermesConfig } from '../../server/kanban-assignees'
+import { getAssigneeDispatchSupport, getAssigneeTaskScopeSupport, readHermesConfig } from '../../server/kanban-assignees'
 
 const HERMES_BIN_CANDIDATES = [
   process.env.HERMES_CLI_BIN,
@@ -1051,6 +1051,13 @@ export const Route = createFileRoute('/api/swarm-dispatch' as never)({
           const support = getAssigneeDispatchSupport(assignee, configuredHumanReviewer())
           if (!support.dispatchSupported) {
             return json({ error: unsupportedAssigneeError(assignee) }, { status: 409 })
+          }
+          const scopeSupport = getAssigneeTaskScopeSupport(assignee, {
+            title: canonical.task.title,
+            body: canonical.task.body,
+          })
+          if (!scopeSupport.allowed) {
+            return json({ error: scopeSupport.reason ?? `Unsupported canonical assignee "${assignee}" for this task scope.` }, { status: 409 })
           }
           if (!canonicalTaskHasUsableScope(canonical.task)) {
             return json({ error: 'Task-bound dispatch requires canonical task title/body scope' }, { status: 409 })

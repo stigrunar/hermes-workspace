@@ -1,7 +1,7 @@
 version: 1
 workers:
   - id: swarm6
-    name: Reviewer
+    name: Merge Reviewer
     role: Reviewer / Merge Gate
     specialty: code review, regression detection, test coverage, merge readiness
     model: GPT-5.4
@@ -25,7 +25,7 @@ workers:
     maxConcurrentTasks: 1
     acceptsBroadcast: true
   - id: swarm12
-    name: Triage
+    name: Issue Triage
     role: PR / Issues Primary
     specialty: GitHub triage, issue reproduction, PR review prep, focused fixes
     model: GPT-5.4
@@ -48,7 +48,7 @@ workers:
     maxConcurrentTasks: 1
     acceptsBroadcast: true
   - id: swarm5
-    name: Builder
+    name: Primary Builder
     role: Primary Builder
     specialty: full-stack implementation across Hermes Workspace and Swarm2
     model: GPT-5.4
@@ -70,7 +70,7 @@ workers:
     maxConcurrentTasks: 1
     acceptsBroadcast: true
   - id: swarm4
-    name: Sage
+    name: Research Intel
     role: Research / AI Intelligence / X Content
     specialty: AI/model/runtime research, technical synthesis, X post drafting
     model: GPT-5.4-mini
@@ -92,7 +92,7 @@ workers:
     maxConcurrentTasks: 1
     acceptsBroadcast: true
   - id: swarm10
-    name: Sidekick
+    name: Patch Builder
     role: Secondary Builder / Fast Patch Lane
     specialty: parallel implementation slices, refactors, focused bug fixes
     model: GPT-5.4
@@ -115,7 +115,7 @@ workers:
     maxConcurrentTasks: 1
     acceptsBroadcast: true
   - id: swarm2
-    name: Foundation
+    name: Runtime Foundation
     role: Backend Foundation / Runtime Contracts
     specialty: ClaudeSwarm runtime contracts, API design, plugin foundations, state
     model: GPT-5.4
@@ -136,7 +136,7 @@ workers:
     maxConcurrentTasks: 1
     acceptsBroadcast: true
   - id: swarm3
-    name: Mirror
+    name: Control Mirror
     role: Swarm Control Plane / Main-Session Mirror
     specialty: control-plane state, card parity, main-agent continuity
     model: GPT-5.4
@@ -155,7 +155,7 @@ workers:
     maxConcurrentTasks: 1
     acceptsBroadcast: true
   - id: swarm8
-    name: Watch
+    name: Ops Watch
     role: Ops / Health / Lifecycle
     specialty: gateway health, cron, runtime/process status, lifecycle sweeps
     model: GPT-5.4
@@ -177,7 +177,7 @@ workers:
     maxConcurrentTasks: 1
     acceptsBroadcast: true
   - id: swarm7
-    name: Scribe
+    name: Docs Scribe
     role: Docs / Specs / Handoffs / Memory Hygiene
     specialty: handoffs, specs, README/docs, skill documentation, memory curation
     model: GPT-5.4-mini
@@ -198,7 +198,7 @@ workers:
     maxConcurrentTasks: 1
     acceptsBroadcast: true
   - id: swarm9
-    name: Lab
+    name: Bench Lab
     role: PC1 Experiments / Local-Model R&D / BenchLoop
     specialty: PC1 experiments, local model testing, model runtime comparisons
     model: GPT-5.4-mini
@@ -220,7 +220,7 @@ workers:
     maxConcurrentTasks: 1
     acceptsBroadcast: true
   - id: swarm11
-    name: QA
+    name: QA Smoke
     role: Secondary QA / Reviewer Support
     specialty: secondary review, smoke verification, expected-vs-actual checks
     model: GPT-5.4
@@ -241,7 +241,7 @@ workers:
     maxConcurrentTasks: 1
     acceptsBroadcast: true
   - id: swarm1
-    name: Overflow
+    name: Overflow Triage
     role: PR / Issues Overflow / Clawsuite (offline for now)
     specialty: parked broken lane, keep out of rotation until worker runtime is repaired
     model: GPT-5.4-mini

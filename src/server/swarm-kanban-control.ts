@@ -8,7 +8,7 @@ import {
   resolveCanonicalBoardDbPath,
   wakeBlockedTaskOnComment,
 } from './swarm-kanban-canonical'
-import { getAssigneeDispatchSupport, readHermesConfig } from './kanban-assignees'
+import { getAssigneeDispatchSupport, getAssigneeTaskScopeSupport, readHermesConfig } from './kanban-assignees'
 
 export type MatrixKanbanControlAction =
   | 'create_task'
@@ -77,12 +77,21 @@ function configuredHumanReviewer(): string | null {
   return reviewer || null
 }
 
-function validateAssignedWorker(assignedWorker: string | null | undefined): MatrixKanbanControlResult | null {
+function validateAssignedWorker(
+  assignedWorker: string | null | undefined,
+  taskScope?: { title?: string | null; body?: string | null },
+): MatrixKanbanControlResult | null {
   const workerId = assignedWorker?.trim()
   if (!workerId) return null
   const support = getAssigneeDispatchSupport(workerId, configuredHumanReviewer())
-  if (support.dispatchSupported) return null
-  return conflict(support.dispatchReason ?? `Assignee "${workerId}" is not dispatchable from The Matrix.`)
+  if (!support.dispatchSupported) {
+    return conflict(support.dispatchReason ?? `Assignee "${workerId}" is not dispatchable from The Matrix.`)
+  }
+  const scopeSupport = getAssigneeTaskScopeSupport(workerId, taskScope)
+  if (!scopeSupport.allowed) {
+    return conflict(scopeSupport.reason ?? `Assignee "${workerId}" is not allowed for this task scope.`)
+  }
+  return null
 }
 
 function requiresReason(reason: string | null | undefined, action: MatrixKanbanControlAction): MatrixKanbanControlResult | null {
@@ -178,7 +187,10 @@ export async function applyMatrixKanbanControl(input: MatrixKanbanControlInput):
       if (!title) return badRequest('title is required for create_task')
       const forbidden = forbiddenStatus(input.status ?? 'backlog')
       if (forbidden) return conflict(forbidden)
-      const workerError = validateAssignedWorker(input.assignedWorker)
+      const workerError = validateAssignedWorker(input.assignedWorker, {
+        title,
+        body: input.body?.trim() ?? '',
+      })
       if (workerError) return workerError
       const status = input.status ?? 'backlog'
       const created = await createKanbanCard({
@@ -220,7 +232,12 @@ export async function applyMatrixKanbanControl(input: MatrixKanbanControlInput):
     }
     case 'assign_task': {
       if (!input.taskId?.trim()) return badRequest('taskId is required for assign_task')
-      const workerError = validateAssignedWorker(input.assignedWorker)
+      const current = loadCanonicalTask(input.taskId, input.board)
+      if (!current) return { ok: false, status: 404, error: 'Task not found' }
+      const workerError = validateAssignedWorker(input.assignedWorker, {
+        title: current.task.title,
+        body: current.task.body,
+      })
       if (workerError) return workerError
       const updated = await updateKanbanCard(input.taskId, {
         assignedWorker: input.assignedWorker?.trim() || null,
@@ -361,11 +378,15 @@ export async function applyMatrixKanbanControl(input: MatrixKanbanControlInput):
       if (!input.taskId?.trim()) return badRequest('taskId is required for reassign_worker')
       const nextAssignee = input.assignedWorker?.trim()
       if (!nextAssignee) return badRequest('assignedWorker is required for reassign_worker')
-      const workerError = validateAssignedWorker(nextAssignee)
+      const current = loadCanonicalTask(input.taskId, input.board)
+      if (!current) return { ok: false, status: 404, error: 'Task not found' }
+      const workerError = validateAssignedWorker(nextAssignee, {
+        title: current.task.title,
+        body: current.task.body,
+      })
       if (workerError) return workerError
       const reasonError = requiresReason(input.reason, input.action)
       if (reasonError) return reasonError
-      const current = loadCanonicalTask(input.taskId, input.board)
       const blocked = blocksWorkerReclaim(current)
       if (blocked) return blocked
       const updated = await updateKanbanCard(input.taskId, {

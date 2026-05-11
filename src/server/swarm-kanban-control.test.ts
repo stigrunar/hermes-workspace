@@ -9,7 +9,7 @@ import {
   resolveCanonicalBoardDbPath,
   wakeBlockedTaskOnComment,
 } from './swarm-kanban-canonical'
-import { getAssigneeDispatchSupport, readHermesConfig } from './kanban-assignees'
+import { getAssigneeDispatchSupport, getAssigneeTaskScopeSupport, readHermesConfig } from './kanban-assignees'
 import { applyMatrixKanbanControl } from './swarm-kanban-control'
 
 vi.mock('./kanban-backend', () => ({
@@ -29,6 +29,7 @@ vi.mock('./swarm-kanban-canonical', () => ({
 
 vi.mock('./kanban-assignees', () => ({
   getAssigneeDispatchSupport: vi.fn(),
+  getAssigneeTaskScopeSupport: vi.fn(),
   readHermesConfig: vi.fn(() => ({ tasks: { human_reviewer: 'reviewer' } })),
 }))
 
@@ -38,6 +39,10 @@ beforeEach(() => {
   vi.mocked(getAssigneeDispatchSupport).mockReturnValue({
     dispatchSupported: true,
     dispatchReason: null,
+  })
+  vi.mocked(getAssigneeTaskScopeSupport).mockReturnValue({
+    allowed: true,
+    reason: null,
   })
   vi.mocked(loadCanonicalTask).mockReturnValue({
     dbPath: '/tmp/kanban.db',
@@ -86,6 +91,27 @@ describe('applyMatrixKanbanControl', () => {
     })
     expect(createKanbanCard).not.toHaveBeenCalled()
     expect(updateKanbanCard).not.toHaveBeenCalled()
+  })
+
+  it('rejects numeric swarm assignees for PM/spec/routing task scope', async () => {
+    vi.mocked(getAssigneeTaskScopeSupport).mockReturnValue({
+      allowed: false,
+      reason: 'Assignee "swarm3" cannot own PM/spec/governance/next-phase routing work from The Matrix. Route this task to a named durable owner such as default, dollydesign, dollyops, dollyresearch, dollyqa, or dollycode instead.',
+    })
+
+    const result = await applyMatrixKanbanControl({
+      action: 'create_task',
+      title: 'Synthesize kickoff research and route next phase',
+      body: 'Update PROJECT_BRIEF.md and TASKS.md with the governance decision.',
+      assignedWorker: 'swarm3',
+    })
+
+    expect(result).toEqual({
+      ok: false,
+      status: 409,
+      error: 'Assignee "swarm3" cannot own PM/spec/governance/next-phase routing work from The Matrix. Route this task to a named durable owner such as default, dollydesign, dollyops, dollyresearch, dollyqa, or dollycode instead.',
+    })
+    expect(createKanbanCard).not.toHaveBeenCalled()
   })
 
   it('returns explicit receipts for allowed safe status moves', async () => {

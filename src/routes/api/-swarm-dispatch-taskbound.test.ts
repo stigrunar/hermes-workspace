@@ -10,7 +10,7 @@ import {
   loadCanonicalTask,
   writeTaskAcceptance,
 } from '../../server/swarm-kanban-canonical'
-import { getAssigneeDispatchSupport, readHermesConfig } from '../../server/kanban-assignees'
+import { getAssigneeDispatchSupport, getAssigneeTaskScopeSupport, readHermesConfig } from '../../server/kanban-assignees'
 import { Route } from './swarm-dispatch'
 
 vi.mock('../../server/auth-middleware', () => ({ isAuthenticated: vi.fn() }))
@@ -41,6 +41,7 @@ vi.mock('../../server/swarm-kanban-canonical', () => ({
 }))
 vi.mock('../../server/kanban-assignees', () => ({
   getAssigneeDispatchSupport: vi.fn(),
+  getAssigneeTaskScopeSupport: vi.fn(),
   readHermesConfig: vi.fn(() => ({ tasks: { human_reviewer: 'reviewer' } })),
 }))
 vi.mock('node:fs', async () => {
@@ -80,6 +81,10 @@ beforeEach(() => {
   vi.mocked(getAssigneeDispatchSupport).mockReturnValue({
     dispatchSupported: true,
     dispatchReason: null,
+  })
+  vi.mocked(getAssigneeTaskScopeSupport).mockReturnValue({
+    allowed: true,
+    reason: null,
   })
   vi.mocked(rosterByWorkerId).mockReturnValue(new Map())
   vi.mocked(loadCanonicalTask).mockReturnValue({
@@ -129,6 +134,45 @@ describe('/api/swarm-dispatch task-bound policy', () => {
     expect(res.status).toBe(409)
     expect(await res.json()).toEqual({
       error: 'Unsupported canonical assignee "workspace": Profile "workspace" has no configured model, so Matrix cannot dispatch it as a Kanban worker.',
+    })
+    expect(createOrUpdateMission).not.toHaveBeenCalled()
+    expect(appendCanonicalComment).not.toHaveBeenCalled()
+    expect(appendCanonicalEvent).not.toHaveBeenCalled()
+  })
+
+  it('rejects numeric swarm assignees for PM/spec/routing task scope before dispatch', async () => {
+    vi.mocked(loadCanonicalTask).mockReturnValue({
+      dbPath: '/tmp/kanban.db',
+      task: {
+        id: 't_demo',
+        title: 'Synthesize kickoff research and route next phase',
+        body: 'Update PROJECT_BRIEF.md and TASKS.md with the governance decision.',
+        assignee: 'swarm3',
+        status: 'ready',
+      },
+    })
+    vi.mocked(getAssigneeTaskScopeSupport).mockReturnValue({
+      allowed: false,
+      reason: 'Assignee "swarm3" cannot own PM/spec/governance/next-phase routing work from The Matrix. Route this task to a named durable owner such as default, dollydesign, dollyops, dollyresearch, dollyqa, or dollycode instead.',
+    })
+
+    const res = await handlers.POST({
+      request: new Request('http://localhost/api/swarm-dispatch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          taskId: 't_demo',
+          board: 'mission-control',
+          reason: 'Matrix request',
+          waitForCheckpoint: false,
+          allowAsync: true,
+        }),
+      }),
+    })
+
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({
+      error: 'Assignee "swarm3" cannot own PM/spec/governance/next-phase routing work from The Matrix. Route this task to a named durable owner such as default, dollydesign, dollyops, dollyresearch, dollyqa, or dollycode instead.',
     })
     expect(createOrUpdateMission).not.toHaveBeenCalled()
     expect(appendCanonicalComment).not.toHaveBeenCalled()

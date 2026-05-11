@@ -2,6 +2,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import YAML from 'yaml'
+import { formatOperatorIdentity } from '../lib/operator-identity'
+import { readSwarmRoster } from './swarm-roster'
 
 export type RawAssignee = {
   id?: unknown
@@ -19,9 +21,25 @@ export type KanbanAssignee = {
   dispatchReason: string | null
 }
 
+export type AssigneeTaskScopeInput = {
+  title?: string | null
+  body?: string | null
+}
+
 const HERMES_HOME = process.env.HERMES_HOME ?? process.env.CLAUDE_HOME ?? path.join(os.homedir(), '.hermes')
 const CONFIG_PATH = path.join(HERMES_HOME, 'config.yaml')
 const PROFILES_PATH = path.join(HERMES_HOME, 'profiles')
+const NUMERIC_SWARM_ID_PATTERN = /^swarm\d+$/i
+const DURABLE_OWNER_REQUIRED_PATTERNS = [
+  /\bproject_brief\.md\b/i,
+  /\btasks\.md\b/i,
+  /\bnext phase\b/i,
+  /\bdesign contract\b/i,
+  /\bgovernance\b/i,
+  /\bdecision\b/i,
+  /\bknowledge(?:\s|-)?vault\b/i,
+  /\bsynthesi[sz]e\b[\s\S]{0,80}\broute\b/i,
+]
 
 function readYamlFile(targetPath: string): Record<string, unknown> {
   try {
@@ -50,14 +68,6 @@ export function getProfileNames(): string[] {
   }
 }
 
-function titleCaseProfile(name: string): string {
-  return name
-    .split(/[-_\s]+/)
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(' ')
-}
-
 function readProfileConfig(workerId: string): Record<string, unknown> | null {
   const configPath = path.join(PROFILES_PATH, workerId, 'config.yaml')
   if (!fs.existsSync(configPath)) return null
@@ -79,6 +89,32 @@ function readModelName(config: Record<string, unknown> | null): string | null {
     if (fallback) return fallback
   }
   return null
+}
+
+function rosterDisplayName(workerId: string): string | null {
+  if (!NUMERIC_SWARM_ID_PATTERN.test(workerId)) return null
+  const rosterWorker = readSwarmRoster([workerId]).workers.find((worker) => worker.id === workerId)
+  const name = rosterWorker?.name?.trim()
+  return name ? name : null
+}
+
+function formatAssigneeLabel(workerId: string, rawLabel?: unknown): string {
+  const rosterName = rosterDisplayName(workerId)
+  if (rosterName) return formatOperatorIdentity(rosterName, workerId)
+  if (typeof rawLabel === 'string') {
+    const trimmed = rawLabel.trim()
+    if (trimmed.length > 0) {
+      if (trimmed.endsWith(`· ${workerId}`)) return trimmed
+      if (trimmed.toLowerCase() !== workerId.toLowerCase()) return formatOperatorIdentity(trimmed, workerId)
+    }
+  }
+  return formatOperatorIdentity(null, workerId)
+}
+
+function taskNeedsDurableOwner(input: AssigneeTaskScopeInput | null | undefined): boolean {
+  const text = `${input?.title ?? ''}\n${input?.body ?? ''}`.trim()
+  if (!text) return false
+  return DURABLE_OWNER_REQUIRED_PATTERNS.some((pattern) => pattern.test(text))
 }
 
 export function getAssigneeDispatchSupport(workerId: string, humanReviewer: string | null = null): {
@@ -111,6 +147,19 @@ export function getAssigneeDispatchSupport(workerId: string, humanReviewer: stri
   }
 }
 
+export function getAssigneeTaskScopeSupport(workerId: string, input?: AssigneeTaskScopeInput | null): {
+  allowed: boolean
+  reason: string | null
+} {
+  if (!NUMERIC_SWARM_ID_PATTERN.test(workerId) || !taskNeedsDurableOwner(input)) {
+    return { allowed: true, reason: null }
+  }
+  return {
+    allowed: false,
+    reason: `Assignee "${workerId}" cannot own PM/spec/governance/next-phase routing work from The Matrix. Route this task to a named durable owner such as default, dollydesign, dollyops, dollyresearch, dollyqa, or dollycode instead.`,
+  }
+}
+
 export function normalizeAssigneePayload(payload: unknown, humanReviewer: string | null): Array<KanbanAssignee> {
   const record = payload && typeof payload === 'object' && !Array.isArray(payload)
     ? payload as Record<string, unknown>
@@ -133,9 +182,7 @@ export function normalizeAssigneePayload(payload: unknown, humanReviewer: string
         : null
     if (!id || seen.has(id)) continue
     seen.add(id)
-    const label = typeof item.label === 'string' && item.label.trim().length > 0
-      ? item.label
-      : titleCaseProfile(id)
+    const label = formatAssigneeLabel(id, item.label)
     const support = getAssigneeDispatchSupport(id, humanReviewer)
     assignees.push({
       id,
@@ -165,7 +212,7 @@ export function listKnownKanbanAssignees(input?: {
     const support = getAssigneeDispatchSupport(id, humanReviewer)
     merged.set(id, {
       id,
-      label: titleCaseProfile(id),
+      label: formatAssigneeLabel(id),
       isHuman: id === humanReviewer,
       dispatchSupported: support.dispatchSupported,
       dispatchReason: support.dispatchReason,
@@ -176,7 +223,7 @@ export function listKnownKanbanAssignees(input?: {
     const support = getAssigneeDispatchSupport(humanReviewer, humanReviewer)
     merged.set(humanReviewer, {
       id: humanReviewer,
-      label: titleCaseProfile(humanReviewer),
+      label: formatAssigneeLabel(humanReviewer),
       isHuman: true,
       dispatchSupported: support.dispatchSupported,
       dispatchReason: support.dispatchReason,
