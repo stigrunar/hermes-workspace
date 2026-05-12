@@ -22,7 +22,7 @@ describe('Swarm2 Kanban backend presentation', () => {
       badgeLabel: 'Shared board',
       badgeTone: 'claude',
       toastTitle: 'Board connected',
-      toastBody: 'Board data is coming from the canonical Hermes SQLite store.',
+      toastBody: 'The Matrix is the control plane. The canonical Hermes SQLite store remains the execution/storage layer.',
       title: 'Canonical storage detected',
     })
   })
