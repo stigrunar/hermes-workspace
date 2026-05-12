@@ -59,6 +59,7 @@ import { Route as ApiSwarmDirectChatRouteImport } from './routes/api/swarm-direc
 import { Route as ApiSwarmDecomposeRouteImport } from './routes/api/swarm-decompose'
 import { Route as ApiSwarmCheckpointRouteImport } from './routes/api/swarm-checkpoint'
 import { Route as ApiSwarmChatRouteImport } from './routes/api/swarm-chat'
+import { Route as ApiSwarmAttentionRouteImport } from './routes/api/swarm-attention'
 import { Route as ApiStartClaudeRouteImport } from './routes/api/start-claude'
 import { Route as ApiStartAgentRouteImport } from './routes/api/start-agent'
 import { Route as ApiSkillsRouteImport } from './routes/api/skills'
@@ -396,6 +397,11 @@ const ApiSwarmCheckpointRoute = ApiSwarmCheckpointRouteImport.update({
 const ApiSwarmChatRoute = ApiSwarmChatRouteImport.update({
   id: '/api/swarm-chat',
   path: '/api/swarm-chat',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiSwarmAttentionRoute = ApiSwarmAttentionRouteImport.update({
+  id: '/api/swarm-attention',
+  path: '/api/swarm-attention',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiStartClaudeRoute = ApiStartClaudeRouteImport.update({
@@ -899,6 +905,7 @@ export interface FileRoutesByFullPath {
   '/api/skills': typeof ApiSkillsRouteWithChildren
   '/api/start-agent': typeof ApiStartAgentRoute
   '/api/start-claude': typeof ApiStartClaudeRoute
+  '/api/swarm-attention': typeof ApiSwarmAttentionRoute
   '/api/swarm-chat': typeof ApiSwarmChatRoute
   '/api/swarm-checkpoint': typeof ApiSwarmCheckpointRoute
   '/api/swarm-decompose': typeof ApiSwarmDecomposeRoute
@@ -1037,6 +1044,7 @@ export interface FileRoutesByTo {
   '/api/skills': typeof ApiSkillsRouteWithChildren
   '/api/start-agent': typeof ApiStartAgentRoute
   '/api/start-claude': typeof ApiStartClaudeRoute
+  '/api/swarm-attention': typeof ApiSwarmAttentionRoute
   '/api/swarm-chat': typeof ApiSwarmChatRoute
   '/api/swarm-checkpoint': typeof ApiSwarmCheckpointRoute
   '/api/swarm-decompose': typeof ApiSwarmDecomposeRoute
@@ -1177,6 +1185,7 @@ export interface FileRoutesById {
   '/api/skills': typeof ApiSkillsRouteWithChildren
   '/api/start-agent': typeof ApiStartAgentRoute
   '/api/start-claude': typeof ApiStartClaudeRoute
+  '/api/swarm-attention': typeof ApiSwarmAttentionRoute
   '/api/swarm-chat': typeof ApiSwarmChatRoute
   '/api/swarm-checkpoint': typeof ApiSwarmCheckpointRoute
   '/api/swarm-decompose': typeof ApiSwarmDecomposeRoute
@@ -1318,6 +1327,7 @@ export interface FileRouteTypes {
     | '/api/skills'
     | '/api/start-agent'
     | '/api/start-claude'
+    | '/api/swarm-attention'
     | '/api/swarm-chat'
     | '/api/swarm-checkpoint'
     | '/api/swarm-decompose'
@@ -1456,6 +1466,7 @@ export interface FileRouteTypes {
     | '/api/skills'
     | '/api/start-agent'
     | '/api/start-claude'
+    | '/api/swarm-attention'
     | '/api/swarm-chat'
     | '/api/swarm-checkpoint'
     | '/api/swarm-decompose'
@@ -1595,6 +1606,7 @@ export interface FileRouteTypes {
     | '/api/skills'
     | '/api/start-agent'
     | '/api/start-claude'
+    | '/api/swarm-attention'
     | '/api/swarm-chat'
     | '/api/swarm-checkpoint'
     | '/api/swarm-decompose'
@@ -1735,6 +1747,7 @@ export interface RootRouteChildren {
   ApiSkillsRoute: typeof ApiSkillsRouteWithChildren
   ApiStartAgentRoute: typeof ApiStartAgentRoute
   ApiStartClaudeRoute: typeof ApiStartClaudeRoute
+  ApiSwarmAttentionRoute: typeof ApiSwarmAttentionRoute
   ApiSwarmChatRoute: typeof ApiSwarmChatRoute
   ApiSwarmCheckpointRoute: typeof ApiSwarmCheckpointRoute
   ApiSwarmDecomposeRoute: typeof ApiSwarmDecomposeRoute
@@ -2136,6 +2149,13 @@ declare module '@tanstack/react-router' {
       path: '/api/swarm-chat'
       fullPath: '/api/swarm-chat'
       preLoaderRoute: typeof ApiSwarmChatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/swarm-attention': {
+      id: '/api/swarm-attention'
+      path: '/api/swarm-attention'
+      fullPath: '/api/swarm-attention'
+      preLoaderRoute: typeof ApiSwarmAttentionRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/start-claude': {
@@ -2973,6 +2993,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiSkillsRoute: ApiSkillsRouteWithChildren,
   ApiStartAgentRoute: ApiStartAgentRoute,
   ApiStartClaudeRoute: ApiStartClaudeRoute,
+  ApiSwarmAttentionRoute: ApiSwarmAttentionRoute,
   ApiSwarmChatRoute: ApiSwarmChatRoute,
   ApiSwarmCheckpointRoute: ApiSwarmCheckpointRoute,
   ApiSwarmDecomposeRoute: ApiSwarmDecomposeRoute,

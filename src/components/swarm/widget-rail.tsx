@@ -58,6 +58,14 @@ type HealthData = {
   }
 }
 
+type AttentionData = {
+  autonomyDeadlock: boolean
+  zeroReadyOpenWork: boolean
+  nonHumanBlockedCount: number
+  doneWithOpenChildCount: number
+  attentionItems: Array<{ tone: 'warn' | 'neutral' | 'good'; text: string }>
+}
+
 async function fetchRuntime(): Promise<{ entries: Array<RuntimeEntry> }> {
   const res = await fetch('/api/swarm-runtime')
   if (!res.ok) throw new Error(String(res.status))
@@ -65,6 +73,11 @@ async function fetchRuntime(): Promise<{ entries: Array<RuntimeEntry> }> {
 }
 async function fetchHealth(): Promise<HealthData> {
   const res = await fetch('/api/swarm-health')
+  if (!res.ok) throw new Error(String(res.status))
+  return res.json()
+}
+async function fetchAttention(): Promise<AttentionData> {
+  const res = await fetch('/api/swarm-attention')
   if (!res.ok) throw new Error(String(res.status))
   return res.json()
 }
@@ -100,6 +113,11 @@ export function WidgetRail({
     queryFn: fetchHealth,
     refetchInterval: 60_000,
   })
+  const attentionQuery = useQuery({
+    queryKey: ['swarm', 'attention'],
+    queryFn: fetchAttention,
+    refetchInterval: 60_000,
+  })
   const onlineCount = members.filter(
     (m) => getOnlineStatus(m) === 'online',
   ).length
@@ -122,6 +140,12 @@ export function WidgetRail({
     if (offlineCount > 0) {
       items.push({ tone: 'warn', text: `${offlineCount} workers not online` })
     }
+    for (const item of attentionQuery.data?.attentionItems ?? []) {
+      items.push(item)
+    }
+    if (attentionQuery.isError) {
+      items.push({ tone: 'warn', text: 'Attention API unavailable' })
+    }
     if (roomIds.length === 0) {
       items.push({ tone: 'neutral', text: 'No active room selected' })
     }
@@ -132,7 +156,7 @@ export function WidgetRail({
       items.push({ tone: 'good', text: 'No attention items' })
     }
     return items
-  }, [authErrors, offlineCount, roomIds.length, runtimeQuery.isError])
+  }, [authErrors, attentionQuery.data?.attentionItems, attentionQuery.isError, offlineCount, roomIds.length, runtimeQuery.isError])
 
   return (
     <aside className="flex w-full flex-col gap-2.5 xl:sticky xl:top-20 xl:self-start">
