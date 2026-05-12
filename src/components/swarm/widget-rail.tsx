@@ -64,6 +64,15 @@ type AttentionData = {
   nonHumanBlockedCount: number
   doneWithOpenChildCount: number
   attentionItems: Array<{ tone: 'warn' | 'neutral' | 'good'; text: string }>
+  suggestedActions: Array<{
+    id: string
+    tone: 'warn' | 'neutral' | 'good'
+    action: string
+    label: string
+    rationale: string
+    requiresHuman: boolean
+    taskPreview: Array<{ id: string; title: string; status: string | null; board: string }>
+  }>
 }
 
 async function fetchRuntime(): Promise<{ entries: Array<RuntimeEntry> }> {
@@ -182,6 +191,30 @@ export function WidgetRail({
               {item.text}
             </div>
           ))}
+          {(attentionQuery.data?.suggestedActions ?? []).length > 0 ? (
+            <div className="space-y-1.5 pt-1">
+              <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-emerald-100/40">
+                Suggested actions
+              </div>
+              {attentionQuery.data!.suggestedActions.slice(0, 3).map((action) => (
+                <div
+                  key={action.id}
+                  className={cn(
+                    'rounded-xl border px-2.5 py-2 text-xs',
+                    action.tone === 'warn'
+                      ? 'border-amber-400/25 bg-amber-500/10 text-amber-100'
+                      : 'border-emerald-400/12 bg-white/[0.025] text-emerald-100/62',
+                  )}
+                  title={action.rationale}
+                >
+                  <div className="font-semibold">{action.label}</div>
+                  <div className="mt-0.5 text-[11px] text-emerald-100/55">
+                    {action.taskPreview.length} shown · {action.requiresHuman ? 'needs review' : 'Matrix can route'}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
         </div>
       </RailPanel>
 

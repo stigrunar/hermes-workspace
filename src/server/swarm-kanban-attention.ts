@@ -37,6 +37,18 @@ export type MatrixDoneWithOpenChild = {
   board: string
 }
 
+export type MatrixAttentionAction = {
+  id: string
+  tone: 'warn' | 'neutral' | 'good'
+  action: 'route_non_human_blockers' | 'promote_or_park_backlog' | 'review_follow_up' | 'review_test_demo_cleanup'
+  label: string
+  rationale: string
+  board: string | null
+  taskIds: Array<string>
+  taskPreview: Array<{ id: string; title: string; status: string | null; board: string }>
+  requiresHuman: boolean
+}
+
 export type MatrixAttentionBoardSnapshot = {
   board: string
   db: string
@@ -56,6 +68,7 @@ export type MatrixAttentionBoardSnapshot = {
   blockedClassCounts: Partial<Record<BlockerClass, number>>
   classifiedOpenTasks: Array<MatrixAttentionTask>
   doneWithOpenChildren: Array<MatrixDoneWithOpenChild>
+  testDemoTaskCandidates: Array<MatrixAttentionTask>
 }
 
 export type MatrixAttentionSnapshot = {
@@ -80,7 +93,10 @@ export type MatrixAttentionSnapshot = {
   autonomyDeadlockBoards: Array<string>
   classifiedOpenTaskPreview: Array<MatrixAttentionTask>
   doneWithOpenChildPreview: Array<MatrixDoneWithOpenChild>
+  testDemoTaskCandidateCount: number
+  testDemoTaskPreview: Array<MatrixAttentionTask>
   attentionItems: Array<{ tone: 'warn' | 'neutral' | 'good'; text: string }>
+  suggestedActions: Array<MatrixAttentionAction>
 }
 
 type SqliteTaskRow = {
@@ -90,6 +106,7 @@ type SqliteTaskRow = {
   assignee?: string | null
   tenant?: string | null
   priority?: number | string | null
+  body?: string | null
   result?: string | null
 }
 
@@ -118,6 +135,7 @@ const APPROVAL_PATTERNS = [/approval needed/i, /go[/-]?no[/-]?go/i, /wait for st
 const PUSH_DEPLOY_PATTERNS = [/git push/i, /push access/i, /repo permissions/i, /permission to .* denied/i, /landing path/i, /upstream\/push/i]
 const RUNTIME_CRASH_PATTERNS = [/pid .* not alive/i, /protocol violation/i, /crash blocker/i, /worker protocol/i, /spawn_failed/i, /timed out/i, /\bcrash(?:ed)?\b/i, /gave[_ -]?up/i]
 const EXTERNAL_LIVE_PATTERNS = [/vectorworks/i, /live boundary/i, /actual .*workstation/i, /actual machine/i, /host bridge/i, /customer-facing/i, /external action remains blocked/i, /needs actual/i]
+const TEST_DEMO_TITLE_PATTERNS = [/^(test|demo|dummy)(\s|[-_:])/i, /\b(test|demo|dummy|fixture|sample|smoke)(\b|[-_:])/i]
 
 function sqliteJson<T>(dbPath: string, sql: string): T {
   const raw = execFileSync('sqlite3', [dbPath, '-json', sql], { encoding: 'utf8', timeout: 15_000 }).trim()
@@ -193,6 +211,15 @@ function recentCommentExcerpt(dbPath: string, taskId: string): string {
   return rows.map((row) => row.body?.trim()).filter(Boolean).join('\n')
 }
 
+function isTestDemoTaskCandidate(row: SqliteTaskRow): boolean {
+  const title = row.title ?? ''
+  return TEST_DEMO_TITLE_PATTERNS.some((pattern) => pattern.test(title))
+}
+
+function actionPreview(tasks: Array<MatrixAttentionTask>): MatrixAttentionAction['taskPreview'] {
+  return tasks.slice(0, 5).map((task) => ({ id: task.id, title: task.title, status: task.status, board: task.board }))
+}
+
 function classifyOpenTask(status: string | null | undefined, text: string): BlockerClass {
   const lowerStatus = (status ?? '').trim().toLowerCase()
   if (lowerStatus === 'todo' || lowerStatus === 'triage' || lowerStatus === 'ready') return 'backlog_triage'
@@ -243,6 +270,7 @@ function emptyBoardSnapshot(board: string, dbPath: string, extra?: Partial<Matri
     blockedClassCounts: {},
     classifiedOpenTasks: [],
     doneWithOpenChildren: [],
+    testDemoTaskCandidates: [],
     ...extra,
   }
 }
@@ -257,7 +285,7 @@ export function boardAttentionSnapshot(dbPath: string, board: string, limit = 8)
     const openCountRows = sqliteJson<Array<{ count: number | string }>>(dbPath, "select count(*) as count from tasks where status not in ('done', 'archived', 'cancelled')")
     const openTaskCount = Number(openCountRows[0]?.count ?? 0)
     const openRows = sqliteJson<Array<SqliteTaskRow>>(dbPath, `
-      select id, title, status, assignee, tenant, priority, result
+      select id, title, status, assignee, tenant, priority, body, result
       from tasks
       where status not in ('done', 'archived', 'cancelled')
       order by case status
@@ -274,11 +302,22 @@ export function boardAttentionSnapshot(dbPath: string, board: string, limit = 8)
     const classifiedOpenTasks = openRows.map((row) => classifyTask(dbPath, board, row))
 
     const allClassRows = sqliteJson<Array<SqliteTaskRow>>(dbPath, `
-      select id, title, status, assignee, tenant, priority, result
+      select id, title, status, assignee, tenant, priority, body, result
       from tasks
       where status in ('blocked', 'todo', 'ready', 'triage')
       order by priority desc, created_at desc
     `)
+    const testDemoRows = sqliteJson<Array<SqliteTaskRow>>(dbPath, `
+      select id, title, status, assignee, tenant, priority, body, result
+      from tasks
+      where status not in ('archived', 'cancelled')
+      order by created_at desc
+      limit 500
+    `)
+    const testDemoTaskCandidates = testDemoRows
+      .filter(isTestDemoTaskCandidate)
+      .map((row) => classifyTask(dbPath, board, row))
+
     const blockedClassCounts: Partial<Record<BlockerClass, number>> = {}
     for (const row of allClassRows) {
       const classified = classifyTask(dbPath, board, row)
@@ -348,6 +387,7 @@ export function boardAttentionSnapshot(dbPath: string, board: string, limit = 8)
       blockedClassCounts,
       classifiedOpenTasks,
       doneWithOpenChildren,
+      testDemoTaskCandidates,
     }
   } catch (error) {
     return emptyBoardSnapshot(board, dbPath, { available: false, error: error instanceof Error ? error.message : String(error) })
@@ -365,6 +405,7 @@ export function getMatrixAttentionSnapshot(limit = 8): MatrixAttentionSnapshot {
   let humanApprovalBlockedCount = 0
   let backlogCount = 0
   const autonomyDeadlockBoards: Array<string> = []
+  let testDemoTaskCandidateCount = 0
 
   for (const board of boards) {
     if (!board.available) continue
@@ -379,6 +420,7 @@ export function getMatrixAttentionSnapshot(limit = 8): MatrixAttentionSnapshot {
     nonHumanBlockedCount += board.nonHumanBlockedCount
     humanApprovalBlockedCount += board.humanApprovalCount
     backlogCount += board.backlogCount
+    testDemoTaskCandidateCount += board.testDemoTaskCandidates.length
     if (board.autonomyDeadlock) autonomyDeadlockBoards.push(board.board)
   }
 
@@ -388,7 +430,9 @@ export function getMatrixAttentionSnapshot(limit = 8): MatrixAttentionSnapshot {
   const autonomyDeadlock = autonomyDeadlockBoards.length > 0
   const classifiedOpenTaskPreview = boards.flatMap((board) => board.classifiedOpenTasks).slice(0, 5)
   const doneWithOpenChildPreview = boards.flatMap((board) => board.doneWithOpenChildren).slice(0, 5)
+  const testDemoTaskPreview = boards.flatMap((board) => board.testDemoTaskCandidates).slice(0, 8)
   const attentionItems: MatrixAttentionSnapshot['attentionItems'] = []
+  const suggestedActions: Array<MatrixAttentionAction> = []
 
   if (autonomyDeadlock) {
     attentionItems.push({ tone: 'warn', text: `Autonomy deadlock: ${autonomyDeadlockBoards.join(', ')} has open work but no ready task` })
@@ -398,6 +442,62 @@ export function getMatrixAttentionSnapshot(limit = 8): MatrixAttentionSnapshot {
   if (nonHumanBlockedCount > 0) attentionItems.push({ tone: 'warn', text: `${nonHumanBlockedCount} non-human blockers need routing` })
   if (doneWithOpenChildCount > 0) attentionItems.push({ tone: 'warn', text: `${doneWithOpenChildCount} done slices still have open follow-up` })
   if (backlogCount > 0 && zeroReady) attentionItems.push({ tone: 'neutral', text: `${backlogCount} backlog/triage items need promotion or parking` })
+  if (testDemoTaskCandidateCount > 0) attentionItems.push({ tone: 'neutral', text: `${testDemoTaskCandidateCount} likely test/demo tasks should be reviewed for archive/parking` })
+
+  const nonHumanTasks = boards.flatMap((board) => board.classifiedOpenTasks.filter((task) => !['human_approval', 'backlog_triage'].includes(task.blockerClass)))
+  if (nonHumanTasks.length > 0) {
+    suggestedActions.push({
+      id: 'route-non-human-blockers',
+      tone: 'warn',
+      action: 'route_non_human_blockers',
+      label: 'Route non-human blockers',
+      rationale: 'These blockers look like runtime, deploy, or external-machine failures, not decisions Stig must make.',
+      board: null,
+      taskIds: nonHumanTasks.map((task) => task.id),
+      taskPreview: actionPreview(nonHumanTasks),
+      requiresHuman: false,
+    })
+  }
+  const backlogTasks = boards.flatMap((board) => board.classifiedOpenTasks.filter((task) => task.blockerClass === 'backlog_triage'))
+  if (backlogTasks.length > 0 && zeroReady) {
+    suggestedActions.push({
+      id: 'promote-or-park-backlog',
+      tone: 'neutral',
+      action: 'promote_or_park_backlog',
+      label: 'Promote or park backlog/triage',
+      rationale: 'There is open backlog/triage work, but no ready task for the dispatcher.',
+      board: null,
+      taskIds: backlogTasks.map((task) => task.id),
+      taskPreview: actionPreview(backlogTasks),
+      requiresHuman: false,
+    })
+  }
+  if (doneWithOpenChildPreview.length > 0) {
+    suggestedActions.push({
+      id: 'review-open-follow-up',
+      tone: 'warn',
+      action: 'review_follow_up',
+      label: 'Review open follow-up from done slices',
+      rationale: 'These parents are done only as scoped slices; linked children still need routing, acceptance, or explicit parking.',
+      board: null,
+      taskIds: doneWithOpenChildPreview.map((item) => item.childId),
+      taskPreview: doneWithOpenChildPreview.map((item) => ({ id: item.childId, title: item.childTitle, status: item.childStatus, board: item.board })),
+      requiresHuman: false,
+    })
+  }
+  if (testDemoTaskPreview.length > 0) {
+    suggestedActions.push({
+      id: 'review-test-demo-cleanup',
+      tone: 'neutral',
+      action: 'review_test_demo_cleanup',
+      label: 'Review likely test/demo tasks',
+      rationale: 'These look synthetic by title/body markers. Matrix should suggest archive/parking, not silently mutate them.',
+      board: null,
+      taskIds: testDemoTaskPreview.map((task) => task.id),
+      taskPreview: actionPreview(testDemoTaskPreview),
+      requiresHuman: true,
+    })
+  }
   if (attentionItems.length === 0) attentionItems.push({ tone: 'good', text: 'Kanban attention clear' })
 
   return {
@@ -422,6 +522,9 @@ export function getMatrixAttentionSnapshot(limit = 8): MatrixAttentionSnapshot {
     autonomyDeadlockBoards,
     classifiedOpenTaskPreview,
     doneWithOpenChildPreview,
+    testDemoTaskCandidateCount,
+    testDemoTaskPreview,
     attentionItems,
+    suggestedActions,
   }
 }
