@@ -101,6 +101,7 @@ function mapDashboardStatusToLane(
     case 'done':
     case 'complete':
     case 'completed':
+    case 'archived':
       return 'done'
     default:
       return 'backlog'
@@ -260,6 +261,7 @@ function readClaudeTasks(): ClaudeTaskRow[] {
     'created_at,',
     'coalesce(last_heartbeat_at, completed_at, started_at, created_at) as updated_at',
     'from tasks',
+    "where status != 'archived'",
     'order by created_at desc, id desc;',
   ].join(' ')
   const raw = runSqlite(detection.dbPath, query)
@@ -310,6 +312,7 @@ function mapClaudeStatus(status: string | null | undefined): SwarmKanbanCard['st
     case 'done':
     case 'complete':
     case 'completed':
+    case 'archived':
       return 'done'
     default:
       return 'backlog'
@@ -485,6 +488,7 @@ const dashboardProxyBackend: KanbanBackend = {
     const cards: SwarmKanbanCard[] = []
     for (const column of board.columns) {
       for (const task of column.tasks) {
+        if ((task.status ?? '').toLowerCase() === 'archived') continue
         cards.push(dashboardTaskToCard(task))
       }
     }

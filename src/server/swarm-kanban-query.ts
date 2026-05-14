@@ -274,6 +274,7 @@ function mapStatusToLane(status: string | null | undefined): SwarmKanbanCard['st
     case 'done':
     case 'complete':
     case 'completed':
+    case 'archived':
       return 'done'
     default:
       return 'backlog'
@@ -551,6 +552,7 @@ async function cardsForBoard(board: SwarmKanbanBoardOption): Promise<Array<Swarm
         'select id, title, body, assignee, status, created_by, created_at, started_at, completed_at, result,',
         "(select summary from task_runs r where r.task_id = tasks.id and r.summary is not null and trim(r.summary) != '' order by coalesce(r.ended_at, r.started_at, 0) desc, r.id desc limit 1) as latest_summary",
         'from tasks',
+        "where status != 'archived'",
         'order by coalesce(completed_at, started_at, created_at) desc, id desc;',
       ].join(' '),
     )
@@ -560,7 +562,9 @@ async function cardsForBoard(board: SwarmKanbanBoardOption): Promise<Array<Swarm
 
   if (getCapabilities().kanban) {
     const response = await fetchDashboardKanbanBoard(board.slug)
-    return response.columns.flatMap((column) => column.tasks.map((task) => withBoardMeta(sqliteTaskToCard(task), board, null, cardShipping(task))))
+    return response.columns.flatMap((column) => column.tasks
+      .filter((task) => (task.status ?? '').toLowerCase() !== 'archived')
+      .map((task) => withBoardMeta(sqliteTaskToCard(task), board, null, cardShipping(task))))
   }
 
   return listSwarmKanbanCards().map((card) => withBoardMeta(card, board))
