@@ -11,7 +11,13 @@ import {
 } from './kanban-dashboard-proxy'
 import { getCapabilities } from './gateway-capabilities'
 import { getKanbanBackendMeta } from './kanban-backend'
-import { ACCEPTANCE_FIELDS, findTaskAcceptance } from './swarm-kanban-canonical'
+import {
+  ACCEPTANCE_FIELDS,
+  findTaskAcceptance,
+  parseShippingGovernorMeta,
+  summarizeShippingGovernorPortfolio,
+} from './swarm-kanban-canonical'
+import type { ShippingGovernorMeta, ShippingGovernorSummary } from './swarm-kanban-canonical'
 import { SWARM_KANBAN_FILE, listSwarmKanbanCards } from './swarm-kanban-store'
 import type { KanbanBackendMeta } from './kanban-backend'
 import type { DashboardKanbanBoard } from './kanban-dashboard-proxy'
@@ -57,6 +63,7 @@ export type SwarmKanbanDoneAudit = {
 
 export type SwarmKanbanCardWithBoard = SwarmKanbanCard & SwarmKanbanCardBoardMeta & {
   doneAudit: SwarmKanbanDoneAudit | null
+  shipping: ShippingGovernorMeta | null
 }
 
 export type SwarmKanbanTaskComment = {
@@ -121,6 +128,7 @@ export type SwarmKanbanTaskDetail = {
   acceptance: SwarmKanbanTaskAcceptance | null
   controlReceipts: Array<SwarmKanbanControlReceipt>
   doneAudit: SwarmKanbanDoneAudit | null
+  shipping: ShippingGovernorMeta | null
 }
 
 type SqliteTaskRow = {
@@ -406,6 +414,7 @@ function withBoardMeta(
   card: SwarmKanbanCard,
   board: Pick<SwarmKanbanBoardOption, 'slug' | 'label' | 'source'>,
   doneAudit: SwarmKanbanDoneAudit | null = null,
+  shipping: ShippingGovernorMeta | null = null,
 ): SwarmKanbanCardWithBoard {
   return {
     ...card,
@@ -413,6 +422,7 @@ function withBoardMeta(
     boardLabel: board.label,
     boardSource: board.source,
     doneAudit,
+    shipping,
   }
 }
 
@@ -524,6 +534,14 @@ export async function listSwarmKanbanBoards(): Promise<Array<SwarmKanbanBoardOpt
   return withAggregateOption(await discoverBoards())
 }
 
+function cardShipping(task: { body?: string | null }): ShippingGovernorMeta | null {
+  return parseShippingGovernorMeta(task.body ?? null)
+}
+
+function boardShippingGovernor(cards: Array<SwarmKanbanCardWithBoard>): ShippingGovernorSummary {
+  return summarizeShippingGovernorPortfolio(cards.map((card) => card.shipping))
+}
+
 async function cardsForBoard(board: SwarmKanbanBoardOption): Promise<Array<SwarmKanbanCardWithBoard>> {
   const localDbPath = boardDbPath(board.slug)
   if (localDbPath) {
@@ -537,12 +555,12 @@ async function cardsForBoard(board: SwarmKanbanBoardOption): Promise<Array<Swarm
       ].join(' '),
     )
     const doneAudits = doneAuditMapForBoard(localDbPath)
-    return rows.map((row) => withBoardMeta(sqliteTaskToCard(row), board, doneAudits.get(row.id) ?? null))
+    return rows.map((row) => withBoardMeta(sqliteTaskToCard(row), board, doneAudits.get(row.id) ?? null, cardShipping(row)))
   }
 
   if (getCapabilities().kanban) {
     const response = await fetchDashboardKanbanBoard(board.slug)
-    return response.columns.flatMap((column) => column.tasks.map((task) => withBoardMeta(sqliteTaskToCard(task), board)))
+    return response.columns.flatMap((column) => column.tasks.map((task) => withBoardMeta(sqliteTaskToCard(task), board, null, cardShipping(task))))
   }
 
   return listSwarmKanbanCards().map((card) => withBoardMeta(card, board))
@@ -553,6 +571,7 @@ export async function querySwarmKanbanBoard(input: {
   taskId?: string | null
 }): Promise<{
   cards: Array<SwarmKanbanCardWithBoard>
+  shippingGovernor: ShippingGovernorSummary
   backend: KanbanBackendMeta
   boards: Array<SwarmKanbanBoardOption>
   selectedBoard: SwarmKanbanSelectedBoard
@@ -578,12 +597,14 @@ export async function querySwarmKanbanBoard(input: {
     cards = await cardsForBoard(selectedBoard)
   }
   cards.sort((a, b) => b.updatedAt - a.updatedAt || a.boardLabel.localeCompare(b.boardLabel) || a.title.localeCompare(b.title))
+  const shippingGovernor = boardShippingGovernor(cards)
   const detailBoard = resolved.slug === ALL_BOARDS_SLUG && input.taskId
     ? cards.find((card) => card.id === input.taskId)?.boardSlug ?? resolved.slug
     : resolved.slug
 
   return {
     cards,
+    shippingGovernor,
     backend,
     boards: withAggregateOption(boards),
     selectedBoard: {
@@ -649,6 +670,7 @@ export async function getSwarmKanbanTaskDetail(input: {
       ].join(' '),
     )
     const doneAudit = doneAuditForTask(detailDbPath, task.id, task.status)
+    const shipping = parseShippingGovernorMeta(task.body ?? null)
     const controlReceipts = events
       .map((event) => parseControlReceipt(event))
       .filter((event): event is SwarmKanbanControlReceipt => Boolean(event))
@@ -687,6 +709,7 @@ export async function getSwarmKanbanTaskDetail(input: {
       acceptance: summarizeAcceptance(findTaskAcceptance(input.taskId, resolved.slug)),
       controlReceipts,
       doneAudit,
+      shipping,
     }
   }
 
@@ -715,6 +738,7 @@ export async function getSwarmKanbanTaskDetail(input: {
       acceptance: null,
       controlReceipts: [],
       doneAudit: null,
+      shipping: parseShippingGovernorMeta(task.body ?? null),
     }
   }
 
@@ -742,5 +766,6 @@ export async function getSwarmKanbanTaskDetail(input: {
     acceptance: null,
     controlReceipts: [],
     doneAudit: null,
+    shipping: null,
   }
 }

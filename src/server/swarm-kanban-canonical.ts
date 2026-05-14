@@ -227,6 +227,41 @@ export function createMutationId(): string {
   return `mx_${randomUUID().replace(/-/g, '').slice(0, 12)}`
 }
 
+export const SHIPPING_STATES = ['idea', 'candidate', 'active_build', 'shipped', 'parked', 'killed'] as const
+export const ACTIVE_SLOT_TYPES = ['build', 'research_plan', 'none'] as const
+export const SHIPPING_ACTIVE_BUILD_LIMIT = 2
+export const SHIPPING_RESEARCH_PLAN_LIMIT = 3
+
+export type ShippingState = (typeof SHIPPING_STATES)[number]
+export type ActiveSlotType = (typeof ACTIVE_SLOT_TYPES)[number]
+
+export type ShippingGovernorMeta = {
+  shippingState: ShippingState | null
+  activeSlotType: ActiveSlotType | null
+  ownerLane: string | null
+  acceptanceCriteria: string | null
+  doneDefinition: string | null
+  dummyOrNoSecretsPlan: string | null
+  codexAcpSpecReady: 'true' | 'false' | 'n/a' | null
+  displacesOrParks: string | null
+  lastShippingReviewAt: string | null
+}
+
+export type ShippingGovernorSummary = {
+  activeBuildCount: number
+  activeBuildLimit: number
+  activeResearchPlanCount: number
+  activeResearchPlanLimit: number
+  candidateCount: number
+  ideaCount: number
+  parkedCount: number
+  killedCount: number
+  shippedCount: number
+  overActiveBuildLimit: boolean
+  overResearchPlanLimit: boolean
+  warnings: Array<string>
+}
+
 export function parseAcceptanceMetadata(value: unknown): SwarmTaskAcceptance | null {
   if (!value || typeof value !== 'object') return null
   const record = value as Record<string, unknown>
@@ -239,17 +274,137 @@ export function parseAcceptanceMetadata(value: unknown): SwarmTaskAcceptance | n
   return next
 }
 
+export function parseKeyValueTextBlock(value: string): Record<string, string> {
+  const parsed: Record<string, string> = {}
+  for (const line of value.split(/\r?\n/)) {
+    const match = line.match(/^\s*([a-z0-9_]+)\s*:\s*(.*?)\s*$/i)
+    if (!match) continue
+    const key = match[1]?.trim().toLowerCase()
+    const text = match[2]?.trim()
+    if (key && text) parsed[key] = text
+  }
+  return parsed
+}
+
 export function parseAcceptanceText(value: string): SwarmTaskAcceptance | null {
   const parsed: Partial<Record<AcceptanceField, string>> = {}
-  for (const line of value.split(/\r?\n/)) {
-    const match = line.match(/^\s*([a-z_]+)\s*:\s*(.*?)\s*$/)
-    if (!match) continue
-    const field = match[1] as AcceptanceField
-    if (!ACCEPTANCE_FIELDS.includes(field)) continue
-    const text = match[2]?.trim()
+  const keyValues = parseKeyValueTextBlock(value)
+  for (const field of ACCEPTANCE_FIELDS) {
+    const text = keyValues[field]?.trim()
     if (text) parsed[field] = text
   }
   return parseAcceptanceMetadata(parsed)
+}
+
+function normalizeEnumValue(value: string | null | undefined): string | null {
+  if (!value) return null
+  const normalized = value.trim().toLowerCase().replace(/[\s-]+/g, '_')
+  return normalized || null
+}
+
+function parseShippingState(value: string | null | undefined): ShippingState | null {
+  const normalized = normalizeEnumValue(value)
+  return normalized && SHIPPING_STATES.includes(normalized as ShippingState) ? (normalized as ShippingState) : null
+}
+
+function parseActiveSlotType(value: string | null | undefined): ActiveSlotType | null {
+  const normalized = normalizeEnumValue(value)
+  return normalized && ACTIVE_SLOT_TYPES.includes(normalized as ActiveSlotType) ? (normalized as ActiveSlotType) : null
+}
+
+function parseSpecReady(value: string | null | undefined): ShippingGovernorMeta['codexAcpSpecReady'] {
+  const normalized = normalizeEnumValue(value)
+  if (normalized === 'true' || normalized === 'false' || normalized === 'n/a') return normalized
+  return null
+}
+
+function nullableText(value: string | null | undefined): string | null {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null
+}
+
+function emptyShippingGovernorSummary(): ShippingGovernorSummary {
+  return {
+    activeBuildCount: 0,
+    activeBuildLimit: SHIPPING_ACTIVE_BUILD_LIMIT,
+    activeResearchPlanCount: 0,
+    activeResearchPlanLimit: SHIPPING_RESEARCH_PLAN_LIMIT,
+    candidateCount: 0,
+    ideaCount: 0,
+    parkedCount: 0,
+    killedCount: 0,
+    shippedCount: 0,
+    overActiveBuildLimit: false,
+    overResearchPlanLimit: false,
+    warnings: [],
+  }
+}
+
+function buildShippingGovernorWarnings(summary: ShippingGovernorSummary): Array<string> {
+  const warnings: Array<string> = []
+  if (summary.activeBuildCount > summary.activeBuildLimit) {
+    warnings.push(`Active Build limit exceeded (${summary.activeBuildCount}/${summary.activeBuildLimit}). Park/finish another build or record Stig override before routing more build work.`)
+  } else if (summary.activeBuildCount === summary.activeBuildLimit) {
+    warnings.push(`Active Build limit reached (${summary.activeBuildCount}/${summary.activeBuildLimit}). Routing another build will exceed the portfolio guardrail.`)
+  }
+  if (summary.activeResearchPlanCount > summary.activeResearchPlanLimit) {
+    warnings.push(`Research/Planning limit exceeded (${summary.activeResearchPlanCount}/${summary.activeResearchPlanLimit}). Park or finish a research/planning track before starting more.`)
+  } else if (summary.activeResearchPlanCount === summary.activeResearchPlanLimit) {
+    warnings.push(`Research/Planning limit reached (${summary.activeResearchPlanCount}/${summary.activeResearchPlanLimit}). Another research/planning track will exceed the guardrail.`)
+  }
+  return warnings
+}
+
+export function parseShippingGovernorMeta(value: string | null | undefined): ShippingGovernorMeta | null {
+  if (!value?.trim()) return null
+  const parsed = parseKeyValueTextBlock(value)
+  const meta: ShippingGovernorMeta = {
+    shippingState: parseShippingState(parsed.shipping_state),
+    activeSlotType: parseActiveSlotType(parsed.active_slot_type),
+    ownerLane: nullableText(parsed.owner_lane),
+    acceptanceCriteria: nullableText(parsed.acceptance_criteria),
+    doneDefinition: nullableText(parsed.done_definition),
+    dummyOrNoSecretsPlan: nullableText(parsed.dummy_or_no_secrets_plan),
+    codexAcpSpecReady: parseSpecReady(parsed.codex_acp_spec_ready),
+    displacesOrParks: nullableText(parsed.displaces_or_parks),
+    lastShippingReviewAt: nullableText(parsed.last_shipping_review_at),
+  }
+  return Object.values(meta).some((entry) => entry !== null) ? meta : null
+}
+
+export function summarizeShippingGovernorPortfolio(items: Array<ShippingGovernorMeta | null | undefined>): ShippingGovernorSummary {
+  const summary = emptyShippingGovernorSummary()
+  for (const item of items) {
+    if (!item) continue
+    if (item.shippingState === 'idea') summary.ideaCount += 1
+    if (item.shippingState === 'candidate') summary.candidateCount += 1
+    if (item.shippingState === 'parked') summary.parkedCount += 1
+    if (item.shippingState === 'killed') summary.killedCount += 1
+    if (item.shippingState === 'shipped') summary.shippedCount += 1
+    if (item.shippingState === 'active_build' && item.activeSlotType === 'build') summary.activeBuildCount += 1
+    if (item.activeSlotType === 'research_plan') summary.activeResearchPlanCount += 1
+  }
+  summary.overActiveBuildLimit = summary.activeBuildCount > summary.activeBuildLimit
+  summary.overResearchPlanLimit = summary.activeResearchPlanCount > summary.activeResearchPlanLimit
+  summary.warnings = buildShippingGovernorWarnings(summary)
+  return summary
+}
+
+export function mergeShippingGovernorSummaries(summaries: Array<ShippingGovernorSummary | null | undefined>): ShippingGovernorSummary {
+  const merged = emptyShippingGovernorSummary()
+  for (const summary of summaries) {
+    if (!summary) continue
+    merged.activeBuildCount += summary.activeBuildCount
+    merged.activeResearchPlanCount += summary.activeResearchPlanCount
+    merged.candidateCount += summary.candidateCount
+    merged.ideaCount += summary.ideaCount
+    merged.parkedCount += summary.parkedCount
+    merged.killedCount += summary.killedCount
+    merged.shippedCount += summary.shippedCount
+  }
+  merged.overActiveBuildLimit = merged.activeBuildCount > merged.activeBuildLimit
+  merged.overResearchPlanLimit = merged.activeResearchPlanCount > merged.activeResearchPlanLimit
+  merged.warnings = buildShippingGovernorWarnings(merged)
+  return merged
 }
 
 export function findTaskAcceptance(taskId: string, board?: string | null): SwarmTaskAcceptance | null {

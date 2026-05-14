@@ -11,7 +11,9 @@ async function loadQueryModule() {
           {
             id: board === 'mission-control' ? 't_matrix' : 't_default',
             title: board === 'mission-control' ? 'Matrix task' : 'Default task',
-            body: '',
+            body: board === 'mission-control'
+              ? 'shipping_state: active_build\nactive_slot_type: build\nowner_lane: dollycode'
+              : 'shipping_state: candidate\nactive_slot_type: none\nowner_lane: dollyops',
             assignee: null,
             status: 'ready',
             created_by: 'tester',
@@ -24,7 +26,7 @@ async function loadQueryModule() {
   const fetchDashboardKanbanTask = vi.fn(async (taskId: string, board?: string) => ({
     id: taskId,
     title: 'Selected task',
-    body: '',
+    body: 'shipping_state: active_build\nactive_slot_type: build\nowner_lane: dollycode\ndone_definition: green tests',
     assignee: null,
     status: 'ready',
     created_by: 'tester',
@@ -80,7 +82,7 @@ async function loadSqliteQueryModule() {
         {
           id: 't_done_parent',
           title: 'Done parent',
-          body: 'Scoped slice landed',
+          body: 'Scoped slice landed\nshipping_state: active_build\nactive_slot_type: build\nowner_lane: dollycode\ndone_definition: shipped + verified',
           assignee: 'dollycode',
           status: 'done',
           created_by: 'tester',
@@ -124,7 +126,7 @@ async function loadSqliteQueryModule() {
         {
           id: 't_done_parent',
           title: 'Done parent',
-          body: 'Scoped slice landed',
+          body: 'Scoped slice landed\nshipping_state: active_build\nactive_slot_type: build\nowner_lane: dollycode\ndone_definition: shipped + verified',
           assignee: 'dollycode',
           status: 'done',
           created_by: 'tester',
@@ -215,6 +217,13 @@ describe('querySwarmKanbanBoard aggregate boards', () => {
     expect(result.boards.map((board) => board.slug)).toEqual(['all', 'default', 'mission-control'])
     expect(fetchDashboardKanbanBoard).toHaveBeenCalledWith('default')
     expect(fetchDashboardKanbanBoard).toHaveBeenCalledWith('mission-control')
+    expect(result.shippingGovernor).toMatchObject({
+      activeBuildCount: 1,
+      activeBuildLimit: 2,
+      activeResearchPlanCount: 0,
+      candidateCount: 1,
+      warnings: [],
+    })
     expect(result.cards).toEqual([
       expect.objectContaining({
         id: 't_matrix',
@@ -222,6 +231,7 @@ describe('querySwarmKanbanBoard aggregate boards', () => {
         boardSlug: 'mission-control',
         boardLabel: 'The Matrix',
         boardSource: 'dashboard',
+        shipping: expect.objectContaining({ shippingState: 'active_build', activeSlotType: 'build', ownerLane: 'dollycode' }),
       }),
       expect.objectContaining({
         id: 't_default',
@@ -229,6 +239,7 @@ describe('querySwarmKanbanBoard aggregate boards', () => {
         boardSlug: 'default',
         boardLabel: 'Root board',
         boardSource: 'dashboard',
+        shipping: expect.objectContaining({ shippingState: 'candidate', activeSlotType: 'none', ownerLane: 'dollyops' }),
       }),
     ])
   })
@@ -243,6 +254,12 @@ describe('querySwarmKanbanBoard aggregate boards', () => {
       id: 't_matrix',
       board: 'mission-control',
       workspacePath: '/tmp/mission-control/t_matrix',
+      shipping: {
+        shippingState: 'active_build',
+        activeSlotType: 'build',
+        ownerLane: 'dollycode',
+        doneDefinition: 'green tests',
+      },
     })
   })
 
@@ -277,6 +294,12 @@ describe('querySwarmKanbanBoard done audit', () => {
         status: 'done',
         boardSlug: 'mission-control',
         boardLabel: 'The Matrix',
+        shipping: expect.objectContaining({
+          shippingState: 'active_build',
+          activeSlotType: 'build',
+          ownerLane: 'dollycode',
+          doneDefinition: 'shipped + verified',
+        }),
         doneAudit: expect.objectContaining({
           openChildCount: 1,
           completedEventCount: 1,
@@ -304,6 +327,12 @@ describe('querySwarmKanbanBoard done audit', () => {
       id: 't_done_parent',
       board: 'mission-control',
       status: 'done',
+      shipping: {
+        shippingState: 'active_build',
+        activeSlotType: 'build',
+        ownerLane: 'dollycode',
+        doneDefinition: 'shipped + verified',
+      },
       doneAudit: {
         openChildCount: 1,
         completedEventCount: 0,

@@ -109,30 +109,40 @@ describe('swarm-kanban-attention', () => {
     expect(snapshot.suggestedActions.map((action) => action.action)).toContain('review_follow_up')
   })
 
-  it('suggests human-reviewed cleanup for explicit test/demo tasks without matching ordinary test-output text', async () => {
+  it('returns Shipping Governor summary and advisory actions when portfolio limits are exceeded', async () => {
     tmpRoot = mkdtempSync(join(tmpdir(), 'matrix-attention-'))
     vi.stubEnv('HERMES_HOME', tmpRoot)
     const dbPath = join(tmpRoot, 'kanban.db')
     createKanbanDb(dbPath, `
       insert into tasks (id, title, body, status, assignee, tenant, priority, created_at)
-      values ('t_demo', 'Demo task: old fixture card', 'Synthetic fixture from smoke setup', 'done', 'default', 'matrix', 1, 100);
-      insert into tasks (id, title, body, status, assignee, tenant, priority, created_at)
-      values ('t_real', 'Deploy/live-review stand-intake design cleanup chain', 'Contains test output in run metadata but is real work', 'todo', 'dollyops', 'stand-intake', 10, 101);
-      insert into tasks (id, title, body, status, assignee, tenant, priority, created_at)
-      values ('t_real_body', 'Internal offer pack', 'Uses synthetic data but is not a test/demo task by title', 'done', 'dollydesign', 'revenue1000', 8, 102);
+      values
+        ('t_build_1', 'Build one', 'shipping_state: active_build\nactive_slot_type: build', 'ready', 'dollycode', 'matrix', 10, 100),
+        ('t_build_2', 'Build two', 'shipping_state: active_build\nactive_slot_type: build', 'ready', 'dollycode', 'matrix', 9, 101),
+        ('t_build_3', 'Build three', 'shipping_state: active_build\nactive_slot_type: build', 'blocked', 'dollycode', 'matrix', 8, 102),
+        ('t_research_1', 'Research one', 'shipping_state: candidate\nactive_slot_type: research_plan', 'ready', 'dollyresearch', 'matrix', 7, 103),
+        ('t_research_2', 'Research two', 'shipping_state: candidate\nactive_slot_type: research_plan', 'ready', 'dollyresearch', 'matrix', 6, 104),
+        ('t_research_3', 'Research three', 'shipping_state: candidate\nactive_slot_type: research_plan', 'ready', 'dollyresearch', 'matrix', 5, 105),
+        ('t_research_4', 'Research four', 'shipping_state: candidate\nactive_slot_type: research_plan', 'ready', 'dollyresearch', 'matrix', 4, 106);
     `)
 
     const mod = await import('./swarm-kanban-attention')
     const snapshot = mod.getMatrixAttentionSnapshot()
 
-    expect(snapshot.testDemoTaskCandidateCount).toBe(1)
-    expect(snapshot.testDemoTaskPreview[0]).toMatchObject({ id: 't_demo', title: 'Demo task: old fixture card' })
-    expect(snapshot.testDemoTaskPreview.some((task) => task.id === 't_real')).toBe(false)
-    expect(snapshot.testDemoTaskPreview.some((task) => task.id === 't_real_body')).toBe(false)
-    expect(snapshot.suggestedActions).toContainEqual(expect.objectContaining({
-      action: 'review_test_demo_cleanup',
-      requiresHuman: true,
-      taskIds: ['t_demo'],
-    }))
+    expect(snapshot.shippingGovernor).toMatchObject({
+      activeBuildCount: 3,
+      activeBuildLimit: 2,
+      activeResearchPlanCount: 4,
+      activeResearchPlanLimit: 3,
+      candidateCount: 4,
+      overActiveBuildLimit: true,
+      overResearchPlanLimit: true,
+    })
+    expect(snapshot.attentionItems.map((item) => item.text).join('\n')).toContain('Shipping Governor: Active Build limit exceeded (3/2)')
+    expect(snapshot.attentionItems.map((item) => item.text).join('\n')).toContain('Shipping Governor: Research/Planning limit exceeded (4/3)')
+    expect(snapshot.suggestedActions.map((action) => action.action)).toEqual(expect.arrayContaining([
+      'review_shipping_slots',
+      'park_or_finish_before_new_build',
+      'review_research_plan_pressure',
+    ]))
   })
 })

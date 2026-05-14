@@ -3,6 +3,8 @@ import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { MATRIX_DEFAULT_BOARD_SLUG } from '../lib/matrix-branding'
 import { getClaudeRoot } from './claude-paths'
+import { mergeShippingGovernorSummaries, parseShippingGovernorMeta, summarizeShippingGovernorPortfolio } from './swarm-kanban-canonical'
+import type { ShippingGovernorSummary } from './swarm-kanban-canonical'
 
 type StatusCounts = Record<string, number>
 type BlockerClass =
@@ -40,7 +42,14 @@ export type MatrixDoneWithOpenChild = {
 export type MatrixAttentionAction = {
   id: string
   tone: 'warn' | 'neutral' | 'good'
-  action: 'route_non_human_blockers' | 'promote_or_park_backlog' | 'review_follow_up' | 'review_test_demo_cleanup'
+  action:
+    | 'route_non_human_blockers'
+    | 'promote_or_park_backlog'
+    | 'review_follow_up'
+    | 'review_test_demo_cleanup'
+    | 'review_shipping_slots'
+    | 'park_or_finish_before_new_build'
+    | 'review_research_plan_pressure'
   label: string
   rationale: string
   board: string | null
@@ -69,6 +78,7 @@ export type MatrixAttentionBoardSnapshot = {
   classifiedOpenTasks: Array<MatrixAttentionTask>
   doneWithOpenChildren: Array<MatrixDoneWithOpenChild>
   testDemoTaskCandidates: Array<MatrixAttentionTask>
+  shippingGovernor: ShippingGovernorSummary
 }
 
 export type MatrixAttentionSnapshot = {
@@ -95,6 +105,7 @@ export type MatrixAttentionSnapshot = {
   doneWithOpenChildPreview: Array<MatrixDoneWithOpenChild>
   testDemoTaskCandidateCount: number
   testDemoTaskPreview: Array<MatrixAttentionTask>
+  shippingGovernor: ShippingGovernorSummary
   attentionItems: Array<{ tone: 'warn' | 'neutral' | 'good'; text: string }>
   suggestedActions: Array<MatrixAttentionAction>
 }
@@ -251,6 +262,10 @@ function classifyTask(dbPath: string, board: string, row: SqliteTaskRow): Matrix
   }
 }
 
+function emptyShippingGovernor(): ShippingGovernorSummary {
+  return summarizeShippingGovernorPortfolio([])
+}
+
 function emptyBoardSnapshot(board: string, dbPath: string, extra?: Partial<MatrixAttentionBoardSnapshot>): MatrixAttentionBoardSnapshot {
   return {
     board,
@@ -271,6 +286,7 @@ function emptyBoardSnapshot(board: string, dbPath: string, extra?: Partial<Matri
     classifiedOpenTasks: [],
     doneWithOpenChildren: [],
     testDemoTaskCandidates: [],
+    shippingGovernor: emptyShippingGovernor(),
     ...extra,
   }
 }
@@ -314,6 +330,12 @@ export function boardAttentionSnapshot(dbPath: string, board: string, limit = 8)
       order by created_at desc
       limit 500
     `)
+    const shippingRows = sqliteJson<Array<SqliteTaskRow>>(dbPath, `
+      select id, title, status, assignee, tenant, priority, body, result
+      from tasks
+      where status not in ('archived', 'cancelled')
+    `)
+    const shippingGovernor = summarizeShippingGovernorPortfolio(shippingRows.map((row) => parseShippingGovernorMeta(row.body ?? null)))
     const testDemoTaskCandidates = testDemoRows
       .filter(isTestDemoTaskCandidate)
       .map((row) => classifyTask(dbPath, board, row))
@@ -388,6 +410,7 @@ export function boardAttentionSnapshot(dbPath: string, board: string, limit = 8)
       classifiedOpenTasks,
       doneWithOpenChildren,
       testDemoTaskCandidates,
+      shippingGovernor,
     }
   } catch (error) {
     return emptyBoardSnapshot(board, dbPath, { available: false, error: error instanceof Error ? error.message : String(error) })
@@ -424,6 +447,7 @@ export function getMatrixAttentionSnapshot(limit = 8): MatrixAttentionSnapshot {
     if (board.autonomyDeadlock) autonomyDeadlockBoards.push(board.board)
   }
 
+  const shippingGovernor = mergeShippingGovernorSummaries(boards.map((board) => board.shippingGovernor))
   const zeroReady = Number(totalStatusCounts.ready ?? 0) === 0
   const zeroRunning = Number(totalStatusCounts.running ?? 0) === 0
   const zeroReadyOpenWork = zeroReady && openWorkCount > 0
@@ -443,6 +467,52 @@ export function getMatrixAttentionSnapshot(limit = 8): MatrixAttentionSnapshot {
   if (doneWithOpenChildCount > 0) attentionItems.push({ tone: 'warn', text: `${doneWithOpenChildCount} done slices still have open follow-up` })
   if (backlogCount > 0 && zeroReady) attentionItems.push({ tone: 'neutral', text: `${backlogCount} backlog/triage items need promotion or parking` })
   if (testDemoTaskCandidateCount > 0) attentionItems.push({ tone: 'neutral', text: `${testDemoTaskCandidateCount} likely test/demo tasks should be reviewed for archive/parking` })
+  for (const warning of shippingGovernor.warnings) {
+    attentionItems.push({ tone: 'warn', text: `Shipping Governor: ${warning}` })
+  }
+
+  const shippingTaggedTasks = boards
+    .flatMap((board) => board.classifiedOpenTasks.map((task) => ({ board: board.board, task })))
+    .filter(({ task }) => task.status !== 'done')
+  if (shippingGovernor.activeBuildCount >= shippingGovernor.activeBuildLimit) {
+    suggestedActions.push({
+      id: 'review-shipping-slots',
+      tone: shippingGovernor.overActiveBuildLimit ? 'warn' : 'neutral',
+      action: 'review_shipping_slots',
+      label: 'Review Shipping Governor build slots',
+      rationale: 'The portfolio is at or over the Active Build limit. Review whether another build should be parked, finished, or explicitly overridden before routing more build work.',
+      board: null,
+      taskIds: shippingTaggedTasks.map(({ task }) => task.id),
+      taskPreview: actionPreview(shippingTaggedTasks.map(({ task }) => task)),
+      requiresHuman: true,
+    })
+  }
+  if (shippingGovernor.activeBuildCount > shippingGovernor.activeBuildLimit) {
+    suggestedActions.push({
+      id: 'park-or-finish-before-new-build',
+      tone: 'warn',
+      action: 'park_or_finish_before_new_build',
+      label: 'Park or finish a build before routing another',
+      rationale: 'Active Build slots are already over limit. Phase 1 stays advisory-first, so surface the pressure clearly instead of mutating tasks silently.',
+      board: null,
+      taskIds: shippingTaggedTasks.map(({ task }) => task.id),
+      taskPreview: actionPreview(shippingTaggedTasks.map(({ task }) => task)),
+      requiresHuman: true,
+    })
+  }
+  if (shippingGovernor.activeResearchPlanCount >= shippingGovernor.activeResearchPlanLimit) {
+    suggestedActions.push({
+      id: 'review-research-plan-pressure',
+      tone: shippingGovernor.overResearchPlanLimit ? 'warn' : 'neutral',
+      action: 'review_research_plan_pressure',
+      label: 'Review research/planning pressure',
+      rationale: 'Research/planning tracks are at or over the portfolio limit. Review whether one should be parked or finished before starting more.',
+      board: null,
+      taskIds: shippingTaggedTasks.map(({ task }) => task.id),
+      taskPreview: actionPreview(shippingTaggedTasks.map(({ task }) => task)),
+      requiresHuman: true,
+    })
+  }
 
   const nonHumanTasks = boards.flatMap((board) => board.classifiedOpenTasks.filter((task) => !['human_approval', 'backlog_triage'].includes(task.blockerClass)))
   if (nonHumanTasks.length > 0) {
@@ -524,6 +594,7 @@ export function getMatrixAttentionSnapshot(limit = 8): MatrixAttentionSnapshot {
     doneWithOpenChildPreview,
     testDemoTaskCandidateCount,
     testDemoTaskPreview,
+    shippingGovernor,
     attentionItems,
     suggestedActions,
   }

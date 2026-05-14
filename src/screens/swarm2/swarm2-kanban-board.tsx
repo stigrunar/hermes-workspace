@@ -8,6 +8,36 @@ import { fetchAssignees, type TaskAssignee } from '@/lib/tasks-api'
 
 type KanbanLane = 'backlog' | 'ready' | 'running' | 'review' | 'blocked' | 'done'
 
+type ShippingState = 'idea' | 'candidate' | 'active_build' | 'shipped' | 'parked' | 'killed'
+type ActiveSlotType = 'build' | 'research_plan' | 'none'
+
+type ShippingGovernorMeta = {
+  shippingState: ShippingState | null
+  activeSlotType: ActiveSlotType | null
+  ownerLane: string | null
+  acceptanceCriteria: string | null
+  doneDefinition: string | null
+  dummyOrNoSecretsPlan: string | null
+  codexAcpSpecReady: 'true' | 'false' | 'n/a' | null
+  displacesOrParks: string | null
+  lastShippingReviewAt: string | null
+}
+
+type ShippingGovernorSummary = {
+  activeBuildCount: number
+  activeBuildLimit: number
+  activeResearchPlanCount: number
+  activeResearchPlanLimit: number
+  candidateCount: number
+  ideaCount: number
+  parkedCount: number
+  killedCount: number
+  shippedCount: number
+  overActiveBuildLimit: boolean
+  overResearchPlanLimit: boolean
+  warnings: Array<string>
+}
+
 type SwarmKanbanCard = {
   id: string
   title: string
@@ -26,6 +56,7 @@ type SwarmKanbanCard = {
   boardLabel?: string
   boardSource?: KanbanBoardOption['source']
   doneAudit?: KanbanDoneAudit | null
+  shipping?: ShippingGovernorMeta | null
 }
 
 type KanbanWorker = {
@@ -156,10 +187,12 @@ type KanbanTaskDetail = {
   acceptance: KanbanTaskAcceptance | null
   controlReceipts: Array<KanbanControlReceipt>
   doneAudit: KanbanDoneAudit | null
+  shipping: ShippingGovernorMeta | null
 }
 
 type KanbanResponse = {
   cards?: Array<SwarmKanbanCard>
+  shippingGovernor?: ShippingGovernorSummary
   backend?: KanbanBackendMeta
   boards?: Array<KanbanBoardOption>
   selectedBoard?: KanbanSelectedBoard
@@ -384,11 +417,29 @@ export function getKanbanControlState(detail: KanbanTaskDetail | null): KanbanCo
 
 type KanbanBoardQuery = {
   cards: Array<SwarmKanbanCard>
+  shippingGovernor: ShippingGovernorSummary
   backend: KanbanBackendMeta | null
   boards: Array<KanbanBoardOption>
   selectedBoard: KanbanSelectedBoard
   readOnly: boolean
   taskDetail: KanbanTaskDetail | null
+}
+
+function emptyShippingGovernorSummary(): ShippingGovernorSummary {
+  return {
+    activeBuildCount: 0,
+    activeBuildLimit: 2,
+    activeResearchPlanCount: 0,
+    activeResearchPlanLimit: 3,
+    candidateCount: 0,
+    ideaCount: 0,
+    parkedCount: 0,
+    killedCount: 0,
+    shippedCount: 0,
+    overActiveBuildLimit: false,
+    overResearchPlanLimit: false,
+    warnings: [],
+  }
 }
 
 async function fetchKanbanBoard(board: string, taskId?: string | null): Promise<KanbanBoardQuery> {
@@ -401,6 +452,7 @@ async function fetchKanbanBoard(board: string, taskId?: string | null): Promise<
   const data = (await res.json()) as KanbanResponse
   return {
     cards: Array.isArray(data.cards) ? data.cards : [],
+    shippingGovernor: data.shippingGovernor ?? emptyShippingGovernorSummary(),
     backend: data.backend ?? null,
     boards: Array.isArray(data.boards) ? data.boards : [],
     selectedBoard: data.selectedBoard ?? { requested: board, slug: board, label: board, description: null, fallback: false },
@@ -431,6 +483,92 @@ function formatMetadata(value: string | null): string | null {
   } catch {
     return value
   }
+}
+
+function shippingStateLabel(value: ShippingState | null | undefined): string | null {
+  switch (value) {
+    case 'idea':
+      return 'Idea'
+    case 'candidate':
+      return 'Candidate'
+    case 'active_build':
+      return 'Active Build'
+    case 'shipped':
+      return 'Shipped'
+    case 'parked':
+      return 'Parked'
+    case 'killed':
+      return 'Killed'
+    default:
+      return null
+  }
+}
+
+function shippingSlotLabel(value: ActiveSlotType | null | undefined): string | null {
+  switch (value) {
+    case 'build':
+      return 'Build slot'
+    case 'research_plan':
+      return 'Research plan slot'
+    case 'none':
+      return 'No active slot'
+    default:
+      return null
+  }
+}
+
+function shippingBadgeTone(value: ShippingState | ActiveSlotType | null | undefined): string {
+  switch (value) {
+    case 'active_build':
+    case 'build':
+      return 'border-emerald-400/40 bg-emerald-500/10 text-emerald-700'
+    case 'candidate':
+      return 'border-blue-400/40 bg-blue-500/10 text-blue-700'
+    case 'idea':
+      return 'border-slate-400/40 bg-slate-500/10 text-slate-700'
+    case 'parked':
+      return 'border-amber-400/40 bg-amber-500/10 text-amber-700'
+    case 'killed':
+      return 'border-red-400/40 bg-red-500/10 text-red-700'
+    case 'shipped':
+      return 'border-green-400/40 bg-green-500/10 text-green-700'
+    case 'research_plan':
+      return 'border-violet-400/40 bg-violet-500/10 text-violet-700'
+    case 'none':
+      return 'border-[var(--theme-border)] bg-[var(--theme-bg)] text-[var(--theme-muted)]'
+    default:
+      return 'border-[var(--theme-border)] bg-[var(--theme-bg)] text-[var(--theme-muted)]'
+  }
+}
+
+function parseShippingGovernorMetaFromText(value: string): ShippingGovernorMeta | null {
+  const parsed: Record<string, string> = {}
+  for (const line of value.split(/\r?\n/)) {
+    const match = line.match(/^\s*([a-z0-9_]+)\s*:\s*(.*?)\s*$/i)
+    if (!match) continue
+    const key = match[1]?.trim().toLowerCase()
+    const text = match[2]?.trim()
+    if (key && text) parsed[key] = text
+  }
+  const normalizeEnum = (input?: string | null) => input?.trim().toLowerCase().replace(/[\s-]+/g, '_') ?? null
+  const shippingState = normalizeEnum(parsed.shipping_state)
+  const activeSlotType = normalizeEnum(parsed.active_slot_type)
+  const meta: ShippingGovernorMeta = {
+    shippingState: shippingState && ['idea', 'candidate', 'active_build', 'shipped', 'parked', 'killed'].includes(shippingState) ? (shippingState as ShippingState) : null,
+    activeSlotType: activeSlotType && ['build', 'research_plan', 'none'].includes(activeSlotType) ? (activeSlotType as ActiveSlotType) : null,
+    ownerLane: parsed.owner_lane?.trim() || null,
+    acceptanceCriteria: parsed.acceptance_criteria?.trim() || null,
+    doneDefinition: parsed.done_definition?.trim() || null,
+    dummyOrNoSecretsPlan: parsed.dummy_or_no_secrets_plan?.trim() || null,
+    codexAcpSpecReady: parsed.codex_acp_spec_ready === 'true' || parsed.codex_acp_spec_ready === 'false' || parsed.codex_acp_spec_ready === 'n/a' ? (parsed.codex_acp_spec_ready as ShippingGovernorMeta['codexAcpSpecReady']) : null,
+    displacesOrParks: parsed.displaces_or_parks?.trim() || null,
+    lastShippingReviewAt: parsed.last_shipping_review_at?.trim() || null,
+  }
+  return Object.values(meta).some((entry) => entry !== null) ? meta : null
+}
+
+function shippingConsumesBuildSlot(meta: ShippingGovernorMeta | null | undefined): boolean {
+  return meta?.shippingState === 'active_build' && meta.activeSlotType === 'build'
 }
 
 export function Swarm2KanbanBoard({
@@ -540,6 +678,10 @@ export function Swarm2KanbanBoard({
     return assigneeLabelMap.get(workerId) ?? workerLabel(workers, workerId)
   }
   const detail = detailQuery.data ?? null
+  const shippingGovernor = query.data?.shippingGovernor ?? emptyShippingGovernorSummary()
+  const createDraftShipping = parseShippingGovernorMetaFromText(createBody)
+  const createReadyWouldExceedBuildLimit = shippingConsumesBuildSlot(createDraftShipping) && shippingGovernor.activeBuildCount >= shippingGovernor.activeBuildLimit
+  const detailWouldExceedBuildLimit = shippingConsumesBuildSlot(detail?.shipping) && shippingGovernor.activeBuildCount > shippingGovernor.activeBuildLimit
   const unsupportedCurrentAssignee = detail?.assignee ? unsupportedAssigneeMap.get(detail.assignee) ?? null : null
   const acceptanceMissingFields = getAcceptanceMissingFields(detail?.acceptance)
   const latestReceipt = latestDispatchReceipt(detail?.controlReceipts)
@@ -550,7 +692,7 @@ export function Swarm2KanbanBoard({
   const canAssignWorker = canEditTask && !claimEvidence
   const canMarkReady = canEditTask && !claimEvidence && detail?.lane !== 'ready'
   const canMarkBlocked = canEditTask && detail?.lane !== 'blocked'
-  const canDispatch = !readOnly && Boolean(detail) && detail?.lane === 'ready' && !claimEvidence && Boolean(detail?.assignee?.trim()) && !unsupportedCurrentAssignee && taskHasUsableScope(detail)
+  const canDispatch = !readOnly && Boolean(detail) && detail?.lane === 'ready' && !claimEvidence && Boolean(detail?.assignee?.trim()) && !unsupportedCurrentAssignee && taskHasUsableScope(detail) && !detailWouldExceedBuildLimit
   const canReclaim = !readOnly && Boolean(detail) && !claimEvidence
 
   useEffect(() => {
@@ -674,6 +816,16 @@ export function Swarm2KanbanBoard({
           )}
           <span className="rounded-full border border-[var(--theme-border)] bg-[var(--theme-bg)] px-2 py-1">{reviewCount} review</span>
           <span className="rounded-full border border-[var(--theme-border)] bg-[var(--theme-bg)] px-2 py-1">{blockedCount} blocked</span>
+          <span className={cn('rounded-full border px-2 py-1 font-medium', shippingGovernor.overActiveBuildLimit ? 'border-red-400/40 bg-red-500/10 text-red-700' : shippingGovernor.activeBuildCount >= shippingGovernor.activeBuildLimit ? 'border-amber-400/40 bg-amber-500/10 text-amber-700' : 'border-[var(--theme-border)] bg-[var(--theme-bg)]')}>
+            Active Builds {shippingGovernor.activeBuildCount}/{shippingGovernor.activeBuildLimit}
+          </span>
+          <span className={cn('rounded-full border px-2 py-1 font-medium', shippingGovernor.overResearchPlanLimit ? 'border-red-400/40 bg-red-500/10 text-red-700' : shippingGovernor.activeResearchPlanCount >= shippingGovernor.activeResearchPlanLimit ? 'border-amber-400/40 bg-amber-500/10 text-amber-700' : 'border-[var(--theme-border)] bg-[var(--theme-bg)]')}>
+            Research/Planning {shippingGovernor.activeResearchPlanCount}/{shippingGovernor.activeResearchPlanLimit}
+          </span>
+          <span className="rounded-full border border-[var(--theme-border)] bg-[var(--theme-bg)] px-2 py-1">Candidates {shippingGovernor.candidateCount}</span>
+          {shippingGovernor.warnings.length > 0 ? (
+            <span className="rounded-full border border-amber-400/40 bg-amber-500/10 px-2 py-1 font-medium text-amber-700">Shipping Governor warning</span>
+          ) : null}
           {doneWithFollowUpCount > 0 ? (
             <span className="rounded-full border border-amber-400/40 bg-amber-500/10 px-2 py-1 font-medium text-amber-700">{doneWithFollowUpCount} done slices have follow-up</span>
           ) : null}
@@ -735,6 +887,17 @@ export function Swarm2KanbanBoard({
             : 'border-emerald-400/40 bg-emerald-500/10 text-emerald-700',
         )}>
           {feedback.message}
+        </div>
+      ) : null}
+
+      {shippingGovernor.warnings.length > 0 ? (
+        <div className="mb-3 rounded-2xl border border-amber-400/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-800">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.18em]">Shipping Governor</div>
+          <div className="mt-2 space-y-1">
+            {shippingGovernor.warnings.map((warning) => (
+              <div key={warning}>• {warning}</div>
+            ))}
+          </div>
         </div>
       ) : null}
 
@@ -806,7 +969,7 @@ export function Swarm2KanbanBoard({
             </button>
             <button
               type="button"
-              disabled={!createTitle.trim() || pendingAction === 'create_task'}
+              disabled={!createTitle.trim() || pendingAction === 'create_task' || createReadyWouldExceedBuildLimit}
               onClick={() => runControlAction({
                 action: 'create_task',
                 board: mutableBoard,
@@ -821,6 +984,11 @@ export function Swarm2KanbanBoard({
               Create ready
             </button>
           </div>
+          {createReadyWouldExceedBuildLimit ? (
+            <div className="mt-3 rounded-xl border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-800">
+              Active Build limit reached ({shippingGovernor.activeBuildCount}/{shippingGovernor.activeBuildLimit}). Park/finish another build or record Stig override before creating another ready Active Build.
+            </div>
+          ) : null}
         </div>
       ) : null}
 
@@ -868,6 +1036,20 @@ export function Swarm2KanbanBoard({
                       <span className="shrink-0 text-[10px] text-[var(--theme-muted)]">{card.status}</span>
                     </div>
                     <div className="text-sm font-semibold leading-snug text-[var(--theme-text)]">{card.title}</div>
+                    {card.shipping ? (
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {shippingStateLabel(card.shipping.shippingState) ? (
+                          <span className={cn('rounded-full border px-2 py-1 text-[10px] font-semibold', shippingBadgeTone(card.shipping.shippingState))}>
+                            {shippingStateLabel(card.shipping.shippingState)}
+                          </span>
+                        ) : null}
+                        {shippingSlotLabel(card.shipping.activeSlotType) ? (
+                          <span className={cn('rounded-full border px-2 py-1 text-[10px] font-semibold', shippingBadgeTone(card.shipping.activeSlotType))}>
+                            {shippingSlotLabel(card.shipping.activeSlotType)}
+                          </span>
+                        ) : null}
+                      </div>
+                    ) : null}
                     {card.doneAudit?.warnings.length ? (
                       <div className="mt-2 flex flex-wrap gap-1.5">
                         {card.doneAudit.openChildCount > 0 ? (
@@ -977,6 +1159,39 @@ export function Swarm2KanbanBoard({
                     <div className="mt-1 font-semibold text-[var(--theme-text)]">{detail.currentRunId ?? '—'}</div>
                   </div>
                 </div>
+
+                {detail.shipping ? (
+                  <div className="rounded-2xl border border-[var(--theme-border)] bg-[var(--theme-bg)] p-4 text-xs text-[var(--theme-text)]">
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--theme-muted)]">Shipping Governor metadata</div>
+                    <div className="mt-3 flex flex-wrap gap-1.5">
+                      {shippingStateLabel(detail.shipping.shippingState) ? (
+                        <span className={cn('rounded-full border px-2 py-1 text-[10px] font-semibold', shippingBadgeTone(detail.shipping.shippingState))}>
+                          {shippingStateLabel(detail.shipping.shippingState)}
+                        </span>
+                      ) : null}
+                      {shippingSlotLabel(detail.shipping.activeSlotType) ? (
+                        <span className={cn('rounded-full border px-2 py-1 text-[10px] font-semibold', shippingBadgeTone(detail.shipping.activeSlotType))}>
+                          {shippingSlotLabel(detail.shipping.activeSlotType)}
+                        </span>
+                      ) : null}
+                    </div>
+                    <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                      <div><span className="text-[var(--theme-muted)]">Owner lane:</span> {detail.shipping.ownerLane ?? '—'}</div>
+                      <div><span className="text-[var(--theme-muted)]">Spec ready:</span> {detail.shipping.codexAcpSpecReady ?? '—'}</div>
+                      <div><span className="text-[var(--theme-muted)]">Last review:</span> {detail.shipping.lastShippingReviewAt ?? '—'}</div>
+                      <div><span className="text-[var(--theme-muted)]">Acceptance criteria:</span> {detail.shipping.acceptanceCriteria ?? '—'}</div>
+                      <div><span className="text-[var(--theme-muted)]">Done definition:</span> {detail.shipping.doneDefinition ?? '—'}</div>
+                      <div><span className="text-[var(--theme-muted)]">Displaces/Parks:</span> {detail.shipping.displacesOrParks ?? '—'}</div>
+                      <div className="md:col-span-2 xl:col-span-3"><span className="text-[var(--theme-muted)]">Dummy/no-secrets plan:</span> {detail.shipping.dummyOrNoSecretsPlan ?? '—'}</div>
+                    </div>
+                  </div>
+                ) : null}
+
+                {detailWouldExceedBuildLimit ? (
+                  <div className="rounded-2xl border border-amber-400/40 bg-amber-500/10 p-4 text-xs text-amber-800">
+                    Active Build limit reached ({shippingGovernor.activeBuildCount}/{shippingGovernor.activeBuildLimit}). Park/finish another build or record Stig override.
+                  </div>
+                ) : null}
 
                 {detail.doneAudit?.warnings.length ? (
                   <div className="rounded-2xl border border-amber-400/40 bg-amber-500/10 p-4 text-xs text-amber-800">
@@ -1105,6 +1320,9 @@ export function Swarm2KanbanBoard({
                         </label>
                         {!detail.assignee?.trim() ? <div className="text-xs text-amber-700">Assign a worker before dispatch.</div> : null}
                         {!taskHasUsableScope(detail) ? <div className="text-xs text-amber-700">Add task title/body scope before dispatch.</div> : null}
+                        {detailWouldExceedBuildLimit ? (
+                          <div className="text-xs text-amber-700">Active Build limit reached ({shippingGovernor.activeBuildCount}/{shippingGovernor.activeBuildLimit}). Park/finish another build or record Stig override.</div>
+                        ) : null}
                         <button
                           type="button"
                           disabled={!canDispatch || pendingAction === 'request_dispatch'}

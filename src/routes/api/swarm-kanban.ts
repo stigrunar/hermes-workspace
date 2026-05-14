@@ -24,6 +24,7 @@ export const Route = createFileRoute('/api/swarm-kanban' as never)({
         return json({
           ok: true,
           cards: result.cards,
+          shippingGovernor: result.shippingGovernor,
           backend: result.backend,
           boards: result.boards,
           selectedBoard: result.selectedBoard,
