@@ -2,10 +2,13 @@ import { createServer } from 'node:http'
 import { readFile, stat } from 'node:fs/promises'
 import { join, extname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import server from './dist/server/server.js'
+import { createServerBuildLoader } from './server-build-loader.js'
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 const CLIENT_DIR = join(__dirname, 'dist', 'client')
+const loadServerBuild = createServerBuildLoader({
+  serverBuildUrl: new URL('./dist/server/server.js', import.meta.url),
+})
 
 const port = parseInt(process.env.PORT || '3000', 10)
 // Default HOST to localhost-only. Operators who want the workspace reachable
@@ -180,7 +183,8 @@ async function requestHandler(req, res) {
   })
 
   try {
-    const response = await server.fetch(request)
+    const serverBuild = await loadServerBuild()
+    const response = await serverBuild.fetch(request)
 
     res.writeHead(
       response.status,
