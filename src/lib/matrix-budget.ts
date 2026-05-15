@@ -1,10 +1,19 @@
 import type { StudioSettings } from '@/hooks/use-settings'
-import type { ProviderStatus } from '@/server/provider-usage'
+import type { ProviderStatus, UsageLine } from '@/server/provider-usage'
 
 export const MATRIX_BUDGET_ENV_KEYS = {
-  advisorySpendLimitUsd: ['VITE_MATRIX_BUDGET_LIMIT_USD', 'MATRIX_BUDGET_LIMIT_USD'],
-  advisorySpendWarningUsd: ['VITE_MATRIX_BUDGET_WARNING_USD', 'MATRIX_BUDGET_WARNING_USD'],
-  advisoryContextLimitPercent: ['VITE_MATRIX_CONTEXT_LIMIT_PERCENT', 'MATRIX_CONTEXT_LIMIT_PERCENT'],
+  advisorySpendLimitUsd: [
+    'VITE_MATRIX_BUDGET_LIMIT_USD',
+    'MATRIX_BUDGET_LIMIT_USD',
+  ],
+  advisorySpendWarningUsd: [
+    'VITE_MATRIX_BUDGET_WARNING_USD',
+    'MATRIX_BUDGET_WARNING_USD',
+  ],
+  advisoryContextLimitPercent: [
+    'VITE_MATRIX_CONTEXT_LIMIT_PERCENT',
+    'MATRIX_CONTEXT_LIMIT_PERCENT',
+  ],
   scopeLabel: ['VITE_MATRIX_BUDGET_SCOPE_LABEL', 'MATRIX_BUDGET_SCOPE_LABEL'],
 } as const
 
@@ -27,6 +36,15 @@ export type MatrixProviderStatus = {
   displayName: string
   status: ProviderStatus
   message?: string
+  lines?: Array<UsageLine>
+}
+
+export type MatrixProviderQuotaSummary = {
+  state: 'unknown' | 'ok' | 'warning' | 'limit'
+  remainingPercent: number | null
+  usedPercent: number | null
+  constrainedBy: string | null
+  action: string
 }
 
 export type MatrixSpendSnapshot = {
@@ -39,8 +57,9 @@ export type MatrixBudgetSummary = {
   spendState: 'unknown' | 'ok' | 'warning' | 'limit'
   costLabel: MatrixSpendSnapshot['costLabel']
   contextState: 'ok' | 'warning' | 'limit'
-  providerState: 'ok' | 'warning'
+  providerState: MatrixProviderQuotaSummary['state']
   providerWarnings: Array<MatrixProviderStatus>
+  providerQuota: MatrixProviderQuotaSummary
 }
 
 function readFiniteNumber(value: unknown): number | null {
@@ -65,7 +84,10 @@ function readPercent(value: unknown, fallback: number): number {
   return Math.min(100, Math.max(1, parsed))
 }
 
-function firstEnvValue(env: Record<string, unknown>, keys: ReadonlyArray<string>): string | undefined {
+function firstEnvValue(
+  env: Record<string, unknown>,
+  keys: ReadonlyArray<string>,
+): string | undefined {
   for (const key of keys) {
     const value = env[key]
     if (typeof value === 'string' && value.trim()) return value.trim()
@@ -88,11 +110,14 @@ export function resolveMatrixBudgetConfig(
     settings.usageThreshold,
   )
   const scopeLabel =
-    firstEnvValue(env, MATRIX_BUDGET_ENV_KEYS.scopeLabel) ?? 'This Matrix cockpit'
+    firstEnvValue(env, MATRIX_BUDGET_ENV_KEYS.scopeLabel) ??
+    'This Matrix cockpit'
 
   const sources = ['settings:usageThreshold', 'settings:preferredBudgetModel']
-  if (advisorySpendLimitUsd != null) sources.push(MATRIX_BUDGET_ENV_KEYS.advisorySpendLimitUsd[0])
-  if (advisorySpendWarningUsd != null) sources.push(MATRIX_BUDGET_ENV_KEYS.advisorySpendWarningUsd[0])
+  if (advisorySpendLimitUsd != null)
+    sources.push(MATRIX_BUDGET_ENV_KEYS.advisorySpendLimitUsd[0])
+  if (advisorySpendWarningUsd != null)
+    sources.push(MATRIX_BUDGET_ENV_KEYS.advisorySpendWarningUsd[0])
   if (firstEnvValue(env, MATRIX_BUDGET_ENV_KEYS.advisoryContextLimitPercent)) {
     sources.push(MATRIX_BUDGET_ENV_KEYS.advisoryContextLimitPercent[0])
   }
@@ -110,6 +135,84 @@ export function resolveMatrixBudgetConfig(
     enforcementMode: 'advisory',
     nextEnforcementHook: MATRIX_BUDGET_ENFORCEMENT_HOOK,
     sources,
+  }
+}
+
+export function summarizeProviderQuota(
+  providers: Array<MatrixProviderStatus>,
+): MatrixProviderQuotaSummary {
+  const providerWarnings = providers.filter(
+    (provider) => provider.status !== 'ok',
+  )
+  if (providerWarnings.length > 0) {
+    return {
+      state: 'limit',
+      remainingPercent: 0,
+      usedPercent: 100,
+      constrainedBy: providerWarnings[0]?.displayName ?? 'provider auth',
+      action: 'Fix provider auth before dispatching more work.',
+    }
+  }
+
+  let mostConstrained: {
+    usedPercent: number
+    remainingPercent: number
+    label: string
+  } | null = null
+
+  for (const provider of providers) {
+    for (const line of provider.lines ?? []) {
+      if (line.type !== 'progress' || line.format !== 'percent') continue
+      if (typeof line.used !== 'number' || !Number.isFinite(line.used)) continue
+      const usedPercent = Math.min(
+        100,
+        Math.max(0, line.limit ? (line.used / line.limit) * 100 : line.used),
+      )
+      const remainingPercent = Math.max(0, 100 - usedPercent)
+      if (
+        !mostConstrained ||
+        remainingPercent < mostConstrained.remainingPercent
+      ) {
+        mostConstrained = {
+          usedPercent,
+          remainingPercent,
+          label: `${provider.displayName} · ${line.label}`,
+        }
+      }
+    }
+  }
+
+  if (!mostConstrained) {
+    return {
+      state: 'unknown',
+      remainingPercent: null,
+      usedPercent: null,
+      constrainedBy: null,
+      action:
+        providers.length > 0
+          ? 'Usage quota source unavailable; keep routing advisory.'
+          : 'No active provider usage source available.',
+    }
+  }
+
+  const state: MatrixProviderQuotaSummary['state'] =
+    mostConstrained.remainingPercent <= 10
+      ? 'limit'
+      : mostConstrained.remainingPercent <= 25
+        ? 'warning'
+        : 'ok'
+
+  return {
+    state,
+    remainingPercent: mostConstrained.remainingPercent,
+    usedPercent: mostConstrained.usedPercent,
+    constrainedBy: mostConstrained.label,
+    action:
+      state === 'limit'
+        ? 'Throttle heavy work or route to another provider.'
+        : state === 'warning'
+          ? 'Prefer light tasks and cheaper/alternate providers.'
+          : 'Capacity looks OK for normal dispatch.',
   }
 }
 
@@ -136,7 +239,10 @@ export function summarizeMatrixBudget(input: {
     }
   }
 
-  const providerWarnings = input.providers.filter((provider) => provider.status !== 'ok')
+  const providerWarnings = input.providers.filter(
+    (provider) => provider.status !== 'ok',
+  )
+  const providerQuota = summarizeProviderQuota(input.providers)
   const contextState: MatrixBudgetSummary['contextState'] =
     input.contextPercent >= input.config.advisoryContextLimitPercent
       ? 'limit'
@@ -149,8 +255,9 @@ export function summarizeMatrixBudget(input: {
     spendState,
     costLabel: input.spend.costLabel,
     contextState,
-    providerState: providerWarnings.length > 0 ? 'warning' : 'ok',
+    providerState: providerQuota.state,
     providerWarnings,
+    providerQuota,
   }
 }
 
@@ -169,7 +276,14 @@ export function formatTokenCount(value: number): string {
   return `${Math.round(value)}`
 }
 
-export function formatCostLabel(label: MatrixSpendSnapshot['costLabel']): string {
+export function formatPercent(value: number | null): string {
+  if (value == null) return 'Unavailable'
+  return `${Math.round(value)}%`
+}
+
+export function formatCostLabel(
+  label: MatrixSpendSnapshot['costLabel'],
+): string {
   switch (label) {
     case 'precise':
       return 'precise'
