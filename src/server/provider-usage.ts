@@ -12,6 +12,7 @@ import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { execSync } from 'node:child_process'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { parse as parseYaml } from 'yaml'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -46,6 +47,7 @@ export type ProviderUsageResponse = {
   ok: boolean
   updatedAt: number
   providers: ProviderUsageResult[]
+  activeProviderIds?: string[]
   error?: string
 }
 
@@ -62,6 +64,140 @@ function readNumber(v: unknown): number | undefined {
 
 function expandHome(p: string): string {
   return p.startsWith('~') ? join(homedir(), p.slice(1)) : p
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null
+}
+
+export function normalizeUsageProviderId(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const provider = value.trim().toLowerCase()
+  if (!provider) return null
+  if (
+    provider === 'codex' ||
+    provider === 'openai-codex' ||
+    provider === 'chatgpt'
+  ) {
+    return 'codex'
+  }
+  if (
+    provider === 'claude' ||
+    provider === 'anthropic' ||
+    provider === 'anthropic-oauth'
+  ) {
+    return 'claude'
+  }
+  if (provider === 'openai' || provider === 'openrouter') return provider
+  return null
+}
+
+function inferProviderFromModel(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const model = value.trim().toLowerCase()
+  if (!model) return null
+  if (model.startsWith('openrouter/')) return 'openrouter'
+  if (model.startsWith('openai-codex/') || model.startsWith('codex/'))
+    return 'codex'
+  if (model.startsWith('openai/')) return 'openai'
+  if (model.startsWith('anthropic/') || model.startsWith('claude-'))
+    return 'claude'
+  return null
+}
+
+function addProvider(target: Set<string>, value: unknown) {
+  const normalized = normalizeUsageProviderId(value)
+  if (normalized) target.add(normalized)
+}
+
+function addProviderFromModel(target: Set<string>, value: unknown) {
+  const inferred = inferProviderFromModel(value)
+  if (inferred) target.add(inferred)
+}
+
+export function resolveActiveUsageProviderIds(config: unknown): Array<string> {
+  const active = new Set<string>()
+  const root = asRecord(config)
+  if (!root) return []
+
+  addProvider(active, root.provider)
+  addProviderFromModel(active, root.model)
+
+  const model = asRecord(root.model)
+  if (model) {
+    addProvider(active, model.provider)
+    addProviderFromModel(active, model.default)
+    addProviderFromModel(active, model.model)
+  }
+
+  const delegation = asRecord(root.delegation)
+  if (delegation) {
+    addProvider(active, delegation.provider)
+    addProviderFromModel(active, delegation.model)
+  }
+
+  const auxiliary = asRecord(root.auxiliary)
+  if (auxiliary) {
+    for (const value of Object.values(auxiliary)) {
+      const entry = asRecord(value)
+      if (!entry) continue
+      addProvider(active, entry.provider)
+      addProviderFromModel(active, entry.model)
+    }
+  }
+
+  if (process.env.MATRIX_PROVIDER_USAGE_INCLUDE_FALLBACKS === 'true') {
+    const fallbacks = Array.isArray(root.fallback_providers)
+      ? (root.fallback_providers as Array<unknown>)
+      : []
+    for (const fallback of fallbacks) {
+      const entry = asRecord(fallback)
+      if (!entry) continue
+      addProvider(active, entry.provider)
+      addProviderFromModel(active, entry.model)
+    }
+  }
+
+  return Array.from(active)
+}
+
+function readActiveUsageProviderIds(): Array<string> {
+  const override = process.env.MATRIX_PROVIDER_USAGE_ACTIVE_PROVIDERS
+  if (override) {
+    return Array.from(
+      new Set(
+        override
+          .split(',')
+          .map((item) => normalizeUsageProviderId(item))
+          .filter((item): item is string => Boolean(item)),
+      ),
+    )
+  }
+
+  const hermesHome =
+    process.env.HERMES_HOME ??
+    process.env.CLAUDE_HOME ??
+    join(homedir(), '.hermes')
+  const configPath = join(hermesHome, 'config.yaml')
+  let activeProviderIds: Array<string> = []
+  if (existsSync(configPath)) {
+    try {
+      activeProviderIds = resolveActiveUsageProviderIds(
+        parseYaml(readFileSync(configPath, 'utf-8')),
+      )
+    } catch {
+      activeProviderIds = []
+    }
+  }
+  if (activeProviderIds.length > 0) return activeProviderIds
+
+  const envConfigured = new Set<string>()
+  if (process.env.OPENAI_API_KEY?.trim()) envConfigured.add('openai')
+  if (process.env.OPENROUTER_API_KEY?.trim()) envConfigured.add('openrouter')
+  if (process.env.ANTHROPIC_API_KEY?.trim()) envConfigured.add('claude')
+  return Array.from(envConfigured)
 }
 
 // ── Claude OAuth ─────────────────────────────────────────────────────────────
@@ -1064,34 +1200,49 @@ export async function getProviderUsage(
     return cache.payload
   }
 
-  const results = await Promise.allSettled([
-    fetchClaudeUsage(),
-    fetchCodexUsage(),
-    fetchOpenAIUsage(),
-    fetchOpenRouterUsage(),
-  ])
+  const activeProviderIds = readActiveUsageProviderIds()
+  const fetchers: Record<string, () => Promise<ProviderUsageResult>> = {
+    claude: fetchClaudeUsage,
+    codex: fetchCodexUsage,
+    openai: fetchOpenAIUsage,
+    openrouter: fetchOpenRouterUsage,
+  }
+  const names: Record<string, string> = {
+    claude: 'Claude (OAuth)',
+    codex: 'Codex',
+    openai: 'OpenAI',
+    openrouter: 'OpenRouter',
+  }
+
+  const results = await Promise.allSettled(
+    activeProviderIds.map((providerId) => fetchers[providerId]?.()),
+  )
 
   const providers: ProviderUsageResult[] = results.map((r, i) => {
-    if (r.status === 'fulfilled') return r.value
-    const names = ['Claude (OAuth)', 'Codex', 'OpenAI', 'OpenRouter']
-    const ids = ['claude', 'codex', 'openai', 'openrouter']
+    const providerId = activeProviderIds[i] ?? 'unknown'
+    if (r.status === 'fulfilled' && r.value) return r.value
     return {
-      provider: ids[i],
-      displayName: names[i],
+      provider: providerId,
+      displayName: names[providerId] ?? providerId,
       status: 'error' as const,
-      message: r.reason instanceof Error ? r.reason.message : String(r.reason),
+      message:
+        r.status === 'rejected' && r.reason instanceof Error
+          ? r.reason.message
+          : String(
+              r.status === 'rejected'
+                ? r.reason
+                : 'No provider usage fetcher available',
+            ),
       lines: [],
       updatedAt: now,
     }
   })
 
-  // Show all providers — unconfigured ones display setup instructions
-  const activeProviders = providers
-
   const payload: ProviderUsageResponse = {
     ok: true,
     updatedAt: now,
-    providers: activeProviders,
+    activeProviderIds,
+    providers,
   }
 
   cache = { timestamp: now, payload }
