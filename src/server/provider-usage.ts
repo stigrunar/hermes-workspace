@@ -445,23 +445,52 @@ type CodexAuth = {
   OPENAI_API_KEY?: string
 }
 
-function loadCodexAuth(): CodexAuth | null {
-  const authPath = expandHome(CODEX_AUTH_PATH)
-  if (!existsSync(authPath)) return null
-  try {
-    return JSON.parse(readFileSync(authPath, 'utf-8'))
-  } catch {
-    return null
+type LoadedCodexAuth = CodexAuth & { __authPath?: string }
+
+function codexAuthCandidatePaths(): Array<string> {
+  const candidates = [expandHome(CODEX_AUTH_PATH)]
+  if (process.env.CODEX_HOME) {
+    candidates.push(join(process.env.CODEX_HOME, 'auth.json'))
   }
+  const hermesHome = process.env.HERMES_HOME ?? process.env.CLAUDE_HOME
+  if (hermesHome) {
+    // Hermes gateway/profile runs commonly keep tool homes under
+    // ~/.hermes/home. Prefer the freshest valid Codex CLI auth there over a
+    // stale login in the Unix account HOME.
+    candidates.push(join(hermesHome, 'home', '.codex', 'auth.json'))
+  }
+  return Array.from(new Set(candidates))
 }
 
-function saveCodexAuth(auth: CodexAuth): void {
+function loadCodexAuth(): LoadedCodexAuth | null {
+  const loaded: Array<LoadedCodexAuth> = []
+  for (const authPath of codexAuthCandidatePaths()) {
+    if (!existsSync(authPath)) continue
+    try {
+      const parsed = JSON.parse(
+        readFileSync(authPath, 'utf-8'),
+      ) as LoadedCodexAuth
+      if (parsed.tokens?.access_token || parsed.tokens?.refresh_token) {
+        parsed.__authPath = authPath
+        loaded.push(parsed)
+      }
+    } catch {
+      /* try next candidate */
+    }
+  }
+  if (loaded.length === 0) return null
+  return loaded.sort((a, b) => {
+    const aTime = a.last_refresh ? new Date(a.last_refresh).getTime() : 0
+    const bTime = b.last_refresh ? new Date(b.last_refresh).getTime() : 0
+    return bTime - aTime
+  })[0]
+}
+
+function saveCodexAuth(auth: LoadedCodexAuth): void {
   try {
-    writeFileSync(
-      expandHome(CODEX_AUTH_PATH),
-      JSON.stringify(auth, null, 2),
-      'utf-8',
-    )
+    const authPath = auth.__authPath ?? expandHome(CODEX_AUTH_PATH)
+    const { __authPath: _authPath, ...serializable } = auth
+    writeFileSync(authPath, JSON.stringify(serializable, null, 2), 'utf-8')
   } catch {
     /* best effort */
   }
@@ -568,7 +597,7 @@ export async function fetchCodexUsage(): Promise<ProviderUsageResult> {
   const headers: Record<string, string> = {
     Authorization: `Bearer ${accessToken}`,
     Accept: 'application/json',
-    'User-Agent': 'ClawSuite',
+    'User-Agent': 'Codex CLI',
   }
   if (auth.tokens.account_id) {
     headers['ChatGPT-Account-Id'] = auth.tokens.account_id
@@ -663,7 +692,7 @@ export async function fetchCodexUsage(): Promise<ProviderUsageResult> {
   if (headerPrimary !== undefined) {
     lines.push({
       type: 'progress',
-      label: 'Session',
+      label: 'Codex 5h',
       used: headerPrimary,
       limit: 100,
       format: 'percent',
@@ -673,7 +702,7 @@ export async function fetchCodexUsage(): Promise<ProviderUsageResult> {
   if (headerSecondary !== undefined) {
     lines.push({
       type: 'progress',
-      label: 'Weekly',
+      label: 'Codex weekly',
       used: headerSecondary,
       limit: 100,
       format: 'percent',
@@ -686,7 +715,7 @@ export async function fetchCodexUsage(): Promise<ProviderUsageResult> {
     if (primaryWindow && typeof primaryWindow.used_percent === 'number') {
       lines.push({
         type: 'progress',
-        label: 'Session',
+        label: 'Codex 5h',
         used: primaryWindow.used_percent as number,
         limit: 100,
         format: 'percent',
@@ -696,11 +725,50 @@ export async function fetchCodexUsage(): Promise<ProviderUsageResult> {
     if (secondaryWindow && typeof secondaryWindow.used_percent === 'number') {
       lines.push({
         type: 'progress',
-        label: 'Weekly',
+        label: 'Codex weekly',
         used: secondaryWindow.used_percent as number,
         limit: 100,
         format: 'percent',
         resetsAt: getResetsAtIso(nowSec, secondaryWindow),
+      })
+    }
+  }
+
+  const additionalRateLimits = Array.isArray(data.additional_rate_limits)
+    ? (data.additional_rate_limits as Array<Record<string, unknown>>)
+    : []
+  for (const limitEntry of additionalRateLimits) {
+    const limitName =
+      typeof limitEntry.limit_name === 'string'
+        ? limitEntry.limit_name
+        : 'Codex add-on'
+    const nestedLimit = limitEntry.rate_limit as
+      | Record<string, unknown>
+      | undefined
+    const nestedPrimary = nestedLimit?.primary_window as
+      | Record<string, unknown>
+      | undefined
+    const nestedSecondary = nestedLimit?.secondary_window as
+      | Record<string, unknown>
+      | undefined
+    if (nestedPrimary && typeof nestedPrimary.used_percent === 'number') {
+      lines.push({
+        type: 'progress',
+        label: `${limitName} 5h`,
+        used: nestedPrimary.used_percent as number,
+        limit: 100,
+        format: 'percent',
+        resetsAt: getResetsAtIso(nowSec, nestedPrimary),
+      })
+    }
+    if (nestedSecondary && typeof nestedSecondary.used_percent === 'number') {
+      lines.push({
+        type: 'progress',
+        label: `${limitName} weekly`,
+        used: nestedSecondary.used_percent as number,
+        limit: 100,
+        format: 'percent',
+        resetsAt: getResetsAtIso(nowSec, nestedSecondary),
       })
     }
   }
@@ -717,16 +785,21 @@ export async function fetchCodexUsage(): Promise<ProviderUsageResult> {
     })
   }
 
-  // Credits
+  // Credits / overage. A falsey Codex `has_credits` with balance 0 means
+  // there is no extra paid credit bucket, not that the included plan quota is
+  // 100% spent.
+  const credits = data.credits as Record<string, unknown> | undefined
   const creditsHeader = readNumber(res.headers.get('x-codex-credits-balance'))
-  const creditsData = (data.credits as Record<string, unknown>)?.balance
+  const creditsData = credits?.balance
   const creditsRemaining = creditsHeader ?? readNumber(creditsData)
-  if (creditsRemaining !== undefined) {
+  const hasCredits =
+    credits?.has_credits === true || credits?.unlimited === true
+  if (hasCredits && creditsRemaining !== undefined) {
     const limit = 1000
     const used = Math.max(0, Math.min(limit, limit - creditsRemaining))
     lines.push({
       type: 'progress',
-      label: 'Credits',
+      label: 'Extra credits',
       used,
       limit,
       format: 'tokens',
