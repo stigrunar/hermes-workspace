@@ -52,35 +52,57 @@ beforeEach(() => {
     if (!isDetail) {
       return {
         data: {
-          cards: [{
-            id: 't_demo',
-            title: 'Task A',
-            spec: 'Spec body',
-            acceptanceCriteria: [],
-            assignedWorker: 'dollycode',
-            reviewer: null,
-            status: 'ready',
-            missionId: null,
-            reportPath: null,
-            createdBy: 'matrix',
-            createdAt: 1,
-            updatedAt: 2,
-            boardSlug: 'mission-control',
-            boardLabel: 'Mission Control',
-            boardSource: 'sqlite',
-            doneAudit: null,
-            shipping: {
-              shippingState: 'active_build',
-              activeSlotType: 'build',
-              ownerLane: 'dollycode',
-              acceptanceCriteria: 'Spec signed off',
-              doneDefinition: 'Green tests',
-              dummyOrNoSecretsPlan: 'Use fixture data',
-              codexAcpSpecReady: 'true',
-              displacesOrParks: 'park legacy build',
-              lastShippingReviewAt: '2026-05-14',
+          cards: [
+            {
+              id: 't_demo',
+              title: 'Task A',
+              spec: 'Spec body',
+              acceptanceCriteria: [],
+              assignedWorker: 'dollycode',
+              reviewer: null,
+              status: 'ready',
+              missionId: null,
+              reportPath: null,
+              createdBy: 'matrix',
+              createdAt: 1,
+              updatedAt: 2,
+              boardSlug: 'mission-control',
+              boardLabel: 'Mission Control',
+              boardSource: 'sqlite',
+              doneAudit: null,
+              shipping: {
+                shippingState: 'active_build',
+                activeSlotType: 'build',
+                ownerLane: 'dollycode',
+                acceptanceCriteria: 'Spec signed off',
+                doneDefinition: 'Green tests',
+                dummyOrNoSecretsPlan: 'Use fixture data',
+                codexAcpSpecReady: 'true',
+                displacesOrParks: 'park legacy build',
+                lastShippingReviewAt: '2026-05-14',
+              },
             },
-          }],
+            {
+              id: 't_done',
+              title: 'Finished Slice',
+              spec: 'Historical completed work',
+              acceptanceCriteria: [],
+              assignedWorker: 'dollycode',
+              reviewer: null,
+              status: 'done',
+              missionId: null,
+              reportPath: null,
+              latestSummary: 'Done handoff',
+              createdBy: 'matrix',
+              createdAt: 1,
+              updatedAt: 3,
+              boardSlug: 'mission-control',
+              boardLabel: 'Mission Control',
+              boardSource: 'sqlite',
+              doneAudit: null,
+              shipping: null,
+            },
+          ],
           shippingGovernor: {
             activeBuildCount: 3,
             activeBuildLimit: 2,
@@ -203,6 +225,32 @@ describe('Swarm2KanbanBoard bounded Matrix controls', () => {
     expect(container.textContent).toContain('Request dispatch')
     expect(container.textContent).toContain('Reassign worker')
     expect(container.textContent).toContain('Add routing comment')
+
+    await unmount()
+  })
+
+  it('collapses done cards by default and expands them on demand', async () => {
+    const { container, unmount } = await renderInto(
+      <Swarm2KanbanBoard workers={[{ id: 'dollycode', displayName: 'DollyCode' }]} />,
+    )
+
+    await waitFor(() => {
+      expect(container.textContent).toContain('Done cards collapsed')
+      expect(container.textContent).toContain('1 completed card hidden')
+    })
+
+    expect(container.textContent).not.toContain('Finished Slice')
+
+    const showDoneButton = buttonByText(container, 'Show done')
+    expect(showDoneButton).toBeTruthy()
+    await React.act(async () => {
+      showDoneButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    await waitFor(() => {
+      expect(container.textContent).toContain('Finished Slice')
+      expect(buttonByText(container, 'Collapse done')).toBeTruthy()
+    })
 
     await unmount()
   })

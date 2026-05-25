@@ -594,6 +594,7 @@ export function Swarm2KanbanBoard({
   const [reclaimReason, setReclaimReason] = useState('')
   const [feedback, setFeedback] = useState<{ tone: 'error' | 'success'; message: string } | null>(null)
   const [pendingAction, setPendingAction] = useState<string | null>(null)
+  const [showDoneCards, setShowDoneCards] = useState(false)
   const lastToastedBackendKey = useRef<string | null>(null)
 
   const query = useQuery({
@@ -1003,6 +1004,8 @@ export function Swarm2KanbanBoard({
       <div className="grid grid-cols-1 gap-3 xl:grid-cols-3 2xl:grid-cols-6">
         {LANES.map((lane) => {
           const laneCards = cardsByLane.get(lane.id) ?? []
+          const isDoneLane = lane.id === 'done'
+          const visibleLaneCards = isDoneLane && !showDoneCards ? [] : laneCards
           return (
             <div key={lane.id} className="min-h-64 rounded-2xl border border-[var(--theme-border)] bg-[var(--theme-bg)] p-2">
               <div className="mb-2 flex items-center justify-between gap-2 px-1">
@@ -1013,13 +1016,28 @@ export function Swarm2KanbanBoard({
                   </div>
                   <div className="mt-1 text-[10px] text-[var(--theme-muted)]">{lane.hint}</div>
                 </div>
+                {isDoneLane && laneCards.length > 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => setShowDoneCards((value) => !value)}
+                    className="shrink-0 rounded-full border border-[var(--theme-border)] bg-[var(--theme-card)] px-2 py-1 text-[10px] font-semibold text-[var(--theme-muted)] transition hover:border-[var(--theme-border2)] hover:text-[var(--theme-text)]"
+                    aria-expanded={showDoneCards}
+                  >
+                    {showDoneCards ? 'Collapse' : 'Show'} done
+                  </button>
+                ) : null}
               </div>
               <div className="space-y-2">
                 {query.isPending ? (
                   <div className="rounded-xl border border-dashed border-[var(--theme-border)] p-3 text-xs text-[var(--theme-muted)]">Waiting for source…</div>
+                ) : isDoneLane && laneCards.length > 0 && !showDoneCards ? (
+                  <div className="rounded-xl border border-dashed border-green-400/40 bg-green-500/10 p-3 text-xs leading-relaxed text-green-800">
+                    <div className="font-semibold">Done cards collapsed</div>
+                    <div className="mt-1 text-[11px]">{laneCards.length} completed card{laneCards.length === 1 ? '' : 's'} hidden to keep the live board short. Open only when you need archive/drill-down context.</div>
+                  </div>
                 ) : laneCards.length === 0 ? (
                   <div className="rounded-xl border border-dashed border-[var(--theme-border)] p-3 text-xs text-[var(--theme-muted)]">Empty</div>
-                ) : laneCards.map((card) => {
+                ) : visibleLaneCards.map((card) => {
                   const cardBoardSlug = card.boardSlug ?? selectedBoard?.slug ?? requestedBoard
                   const cardBoardLabel = card.boardLabel ?? selectedBoard?.label ?? cardBoardSlug
                   return (
